@@ -1,0 +1,69 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35825.156
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Demo", "Demo", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Hardware", "Hardware", "{3CAD99B4-0808-4AF3-BDB3-26FF1C1CB6FB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Provider", "Provider", "{6034FE4F-7BCF-4A84-A7F7-F03218FF03A3}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.gitignore = .gitignore
+		README.md = README.md
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.OpenAi", "Provider\Ai.Tlbx.RealTimeAudio.OpenAi\Ai.Tlbx.RealTimeAudio.OpenAi.csproj", "{79995214-3406-404E-0FE8-19B86858758D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.Hardware.Web", "Hardware\Ai.Tlbx.RealTimeAudio.Hardware.Web\Ai.Tlbx.RealTimeAudio.Hardware.Web.csproj", "{25A86102-B611-9356-88BD-0EF323931AFF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.Hardware.Windows", "Hardware\Ai.Tlbx.RealTimeAudio.Hardware.Windows\Ai.Tlbx.RealTimeAudio.Hardware.Windows.csproj", "{96819834-9590-CA96-BFA0-C018EC5912B8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.Demo.Web", "Demo\Ai.Tlbx.RealTimeAudio.Demo.Web\Ai.Tlbx.RealTimeAudio.Demo.Web.csproj", "{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.Demo.Windows", "Demo\Ai.Tlbx.RealTimeAudio.Demo.Windows\Ai.Tlbx.RealTimeAudio.Demo.Windows.csproj", "{6622AF80-6A7D-2D1F-F479-93DFE9846FA3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{79995214-3406-404E-0FE8-19B86858758D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{79995214-3406-404E-0FE8-19B86858758D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{79995214-3406-404E-0FE8-19B86858758D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{79995214-3406-404E-0FE8-19B86858758D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{25A86102-B611-9356-88BD-0EF323931AFF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{25A86102-B611-9356-88BD-0EF323931AFF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{25A86102-B611-9356-88BD-0EF323931AFF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{25A86102-B611-9356-88BD-0EF323931AFF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{96819834-9590-CA96-BFA0-C018EC5912B8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{96819834-9590-CA96-BFA0-C018EC5912B8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{96819834-9590-CA96-BFA0-C018EC5912B8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{96819834-9590-CA96-BFA0-C018EC5912B8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6622AF80-6A7D-2D1F-F479-93DFE9846FA3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6622AF80-6A7D-2D1F-F479-93DFE9846FA3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6622AF80-6A7D-2D1F-F479-93DFE9846FA3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6622AF80-6A7D-2D1F-F479-93DFE9846FA3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{79995214-3406-404E-0FE8-19B86858758D} = {6034FE4F-7BCF-4A84-A7F7-F03218FF03A3}
+		{25A86102-B611-9356-88BD-0EF323931AFF} = {3CAD99B4-0808-4AF3-BDB3-26FF1C1CB6FB}
+		{96819834-9590-CA96-BFA0-C018EC5912B8} = {3CAD99B4-0808-4AF3-BDB3-26FF1C1CB6FB}
+		{0EDBDD80-8B32-D4D4-8FD0-3BA5D9BF6BBF} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{6622AF80-6A7D-2D1F-F479-93DFE9846FA3} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8067B8B3-23AA-484C-AFB0-02D32E84F8C7}
+	EndGlobalSection
+EndGlobal
