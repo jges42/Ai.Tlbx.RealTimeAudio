@@ -4,6 +4,24 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    
+    <!-- NuGet Package Metadata -->
+    <PackageId>Ai.Tlbx.RealTimeAudio.Hardware.Windows</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Aturis</Authors>
+    <Company>Aturis</Company>
+    <Description>Windows-specific hardware integration for real-time audio processing</Description>
+    <PackageTags>audio;windows;realtime;hardware</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/yourusername/Ai.Tlbx.RealTimeAudio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageOutputPath>..\..\nupkg</PackageOutputPath>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

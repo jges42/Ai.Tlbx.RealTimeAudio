@@ -6,9 +6,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.RealTimeAudio.Hardware.Web\Ai.Tlbx.RealTimeAudio.Hardware.Web.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.RealTimeAudio.OpenAi\Ai.Tlbx.RealTimeAudio.OpenAi.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <ProjectReference Include="..\..\Hardware\Ai.Tlbx.RealTimeAudio.Hardware.Web\Ai.Tlbx.RealTimeAudio.Hardware.Web.csproj" />
+    <PackageReference Include="Ai.Tlbx.RealTimeAudio.OpenAi" Version="1.0.0" />
   </ItemGroup>
 
 </Project>
