@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -8,16 +8,19 @@
     <!-- NuGet Package Metadata -->
     <PackageId>Ai.Tlbx.RealTimeAudio.OpenAi</PackageId>
     <Version>1.0.0</Version>
-    <Authors>Aturis</Authors>
-    <Company>Aturis</Company>
+    <Authors>Johannes Schmidt</Authors>
+    <Company>TLBX</Company>
     <Description>Real-time audio processing library for OpenAI integration</Description>
     <PackageTags>audio;openai;realtime;speech</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://github.com/yourusername/Ai.Tlbx.RealTimeAudio</RepositoryUrl>
+    <RepositoryUrl>https://github.com/AiTlbx/Ai.Tlbx.RealTimeAudio</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageOutputPath>..\..\nupkg</PackageOutputPath>
+    <PackageProjectUrl>https://github.com/AiTlbx/Ai.Tlbx.RealTimeAudio</PackageProjectUrl>
+    <Copyright>Copyright (c) 2024 Johannes Schmidt, TLBX</Copyright>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
   </PropertyGroup>
 
   <ItemGroup>

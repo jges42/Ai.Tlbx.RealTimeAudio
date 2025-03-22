@@ -2,6 +2,10 @@
 
 A toolkit for real-time audio processing in .NET applications with seamless integration with AI services.
 
+## GitHub Repository
+
+[https://github.com/AiTlbx/Ai.Tlbx.RealTimeAudio](https://github.com/AiTlbx/Ai.Tlbx.RealTimeAudio)
+
 ## Packages
 
 This toolkit offers the following NuGet packages:
@@ -9,6 +13,8 @@ This toolkit offers the following NuGet packages:
 ### Ai.Tlbx.RealTimeAudio.OpenAi
 
 Real-time audio processing library with OpenAI integration for speech recognition, transcription, and analysis.
+
+**NuGet Package**: [https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.OpenAi/](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.OpenAi/)
 
 #### Installation
 
@@ -48,6 +54,8 @@ await using (var audioStream = await openAiClient.CreateStreamingSessionAsync())
 ### Ai.Tlbx.RealTimeAudio.Hardware.Windows
 
 Windows-specific hardware integration for real-time audio processing, supporting microphone access, audio device management, and low-latency playback.
+
+**NuGet Package**: [https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.Hardware.Windows/](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.Hardware.Windows/)
 
 #### Installation
 
