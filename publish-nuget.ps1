@@ -1,16 +1,58 @@
 # Script to build NuGet packages with auto-incremented version numbers
 # This script will:
-# 1. Extract the current git hash
-# 2. Increment the patch version number (1.0.x)
-# 3. Build the packages with the version 1.0.x-g{githash}
-# 4. If NUGET_API_KEY environment variable exists, upload packages to NuGet.org
+# 1. Commit and push any pending changes to git
+# 2. Extract the current git hash
+# 3. Increment the patch version number (1.0.x)
+# 4. Build the packages with the version 1.0.x-g{githash}
+# 5. If NUGET_API_KEY environment variable exists, upload packages to NuGet.org
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+
+    [Parameter(Mandatory=$false)]
+    [string]$CommitMessage = "Automated version increment for NuGet publishing"
 )
 
 $ErrorActionPreference = "Stop"
+
+# Check for uncommitted changes
+$gitStatus = git status --porcelain
+
+if ($gitStatus) 
+{
+    Write-Host "Uncommitted changes detected. Committing changes..." -ForegroundColor Yellow
+    
+    # Add all changes
+    git add .
+    
+    # Commit changes
+    git commit -m $CommitMessage
+    
+    if ($LASTEXITCODE -ne 0) 
+    {
+        Write-Error "Failed to commit changes. Aborting."
+        exit 1
+    }
+    
+    Write-Host "Changes committed successfully." -ForegroundColor Green
+}
+else 
+{
+    Write-Host "No uncommitted changes detected." -ForegroundColor Green
+}
+
+# Push to remote
+Write-Host "Pushing to remote repository..." -ForegroundColor Yellow
+git push
+
+if ($LASTEXITCODE -ne 0) 
+{
+    Write-Error "Failed to push to remote repository. Aborting."
+    exit 1
+}
+
+Write-Host "Successfully pushed to remote repository." -ForegroundColor Green
 
 # Create output directory if it doesn't exist
 $nupkgDir = Join-Path $PSScriptRoot "nupkg"
@@ -153,6 +195,12 @@ foreach ($project in $projects)
     
     Write-Host ""
 }
+
+# Commit the version change
+Write-Host "Committing version.txt change..." -ForegroundColor Yellow
+git add $versionFilePath
+git commit -m "Increment version to $newVersion"
+git push
 
 Write-Host "Package building completed."
 Write-Host "NuGet packages are available in: $nupkgDir"
