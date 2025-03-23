@@ -42,8 +42,15 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         private StringBuilder _currentAiMessage = new StringBuilder();
         private StringBuilder _currentUserMessage = new StringBuilder();
 
+        // Add these fields for microphone testing
+        private bool _isMicrophoneTesting = false;
+        private List<string> _micTestAudioChunks = new List<string>();
+        private readonly object _micTestLock = new object();
+        private CancellationTokenSource? _micTestCancellation;
+
         public event EventHandler<string>? ConnectionStatusChanged;
         public event EventHandler<OpenAiChatMessage>? MessageAdded;
+        public event EventHandler<string>? MicrophoneTestStatusChanged;
 
         // Public readonly properties to expose internal state
         public bool IsInitialized => _isInitialized;
@@ -70,6 +77,8 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 SetVoice(value);
             }
         }
+
+        public bool IsMicrophoneTesting => _isMicrophoneTesting;
 
         public OpenAiRealTimeApiAccess(IAudioHardwareAccess hardwareAccess)
         {
@@ -1208,6 +1217,139 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 
             // Settings are valid
             return true;
+        }
+
+        /// <summary>
+        /// Tests the microphone by recording 5 seconds of audio and playing it back
+        /// </summary>
+        /// <returns>A task representing the asynchronous operation</returns>
+        public async Task<bool> TestMicrophone()
+        {
+            // Can't test while recording or already testing
+            if (_isRecording || _isMicrophoneTesting)
+            {
+                RaiseMicTestStatus("Cannot test microphone while recording or already testing");
+                return false;
+            }
+
+            try
+            {
+                _isMicrophoneTesting = true;
+                _micTestCancellation = new CancellationTokenSource();
+                
+                // Clear any previous test data
+                lock (_micTestLock)
+                {
+                    _micTestAudioChunks.Clear();
+                }
+                
+                // Initialize audio system if needed
+                await _hardwareAccess.InitAudio();
+                
+                // Start recording audio
+                RaiseMicTestStatus("Recording 5 seconds of audio...");
+                
+                bool success = await _hardwareAccess.StartRecordingAudio(OnMicTestAudioReceived);
+                if (!success)
+                {
+                    _isMicrophoneTesting = false;
+                    RaiseMicTestStatus("Failed to start recording for microphone test");
+                    return false;
+                }
+                
+                // Record for 5 seconds
+                try
+                {
+                    await Task.Delay(5000, _micTestCancellation.Token);
+                }
+                catch (TaskCanceledException)
+                {
+                    // Test was canceled
+                    RaiseMicTestStatus("Microphone test canceled");
+                    await _hardwareAccess.StopRecordingAudio();
+                    _isMicrophoneTesting = false;
+                    return false;
+                }
+                
+                // Stop recording
+                await _hardwareAccess.StopRecordingAudio();
+                
+                // Play back the recorded audio
+                RaiseMicTestStatus("Playing back recorded audio...");
+                
+                List<string> audioChunks;
+                lock (_micTestLock)
+                {
+                    audioChunks = new List<string>(_micTestAudioChunks);
+                }
+                
+                if (audioChunks.Count == 0)
+                {
+                    RaiseMicTestStatus("No audio was recorded. Check your microphone settings.");
+                    _isMicrophoneTesting = false;
+                    return false;
+                }
+                
+                // Play back each chunk
+                foreach (var chunk in audioChunks)
+                {
+                    await _hardwareAccess.PlayAudio(chunk, 24000);
+                    
+                    // Check if canceled
+                    if (_micTestCancellation.Token.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+                
+                RaiseMicTestStatus("Microphone test completed");
+                _isMicrophoneTesting = false;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                RaiseMicTestStatus($"Error during microphone test: {ex.Message}");
+                _isMicrophoneTesting = false;
+                return false;
+            }
+            finally
+            {
+                _micTestCancellation?.Dispose();
+                _micTestCancellation = null;
+            }
+        }
+        
+        /// <summary>
+        /// Cancels an in-progress microphone test
+        /// </summary>
+        public void CancelMicrophoneTest()
+        {
+            if (_isMicrophoneTesting)
+            {
+                _micTestCancellation?.Cancel();
+                RaiseMicTestStatus("Microphone test canceled");
+                
+                // Clear the audio queue to stop playback
+                _ = _hardwareAccess.ClearAudioQueue();
+            }
+        }
+        
+        private void OnMicTestAudioReceived(object sender, MicrophoneAudioReceivedEvenArgs e)
+        {
+            if (_isMicrophoneTesting && !string.IsNullOrEmpty(e.Base64EncodedPcm16Audio))
+            {
+                lock (_micTestLock)
+                {
+                    _micTestAudioChunks.Add(e.Base64EncodedPcm16Audio);
+                    Debug.WriteLine($"[MicTest] Recorded audio chunk: {e.Base64EncodedPcm16Audio.Length} chars");
+                }
+            }
+        }
+        
+        private void RaiseMicTestStatus(string status)
+        {
+            Debug.WriteLine($"[MicTest] {status}");
+            MicrophoneTestStatusChanged?.Invoke(this, status);
         }
     }    
 }

@@ -38,6 +38,24 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
         Echo,
         
         /// <summary>
+        /// Fable voice - Narrative, storytelling voice
+        /// </summary>
+        [JsonPropertyName("fable")]
+        Fable,
+        
+        /// <summary>
+        /// Nova voice - Energetic, lively voice
+        /// </summary>
+        [JsonPropertyName("nova")]
+        Nova,
+        
+        /// <summary>
+        /// Onyx voice - Deep, authoritative voice
+        /// </summary>
+        [JsonPropertyName("onyx")]
+        Onyx,
+        
+        /// <summary>
         /// Sage voice - Thoughtful, measured voice
         /// </summary>
         [JsonPropertyName("sage")]
