@@ -18,6 +18,12 @@ public class Program
         builder.Services.AddScoped<IAudioHardwareAccess,WebAudioAccess>();
         builder.Services.AddScoped<OpenAiRealTimeApiAccess>();
 
+        builder.Services.AddSignalR(options =>
+        {
+            options.MaximumReceiveMessageSize = 1024 * 1024; // 1 MB, adjust as needed
+            options.StreamBufferCapacity = 100; // Buffer for streaming
+        });
+
         var app = builder.Build();
 
         // Configure the HTTP request pipeline.

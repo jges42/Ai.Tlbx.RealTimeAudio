@@ -48,7 +48,27 @@ async function initAudioWithUserInteraction() {
             console.log("AudioContext resumed, new state:", audioContext.state);
         }
         
+        // Check if browser supports getUserMedia
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error("This browser doesn't support accessing the microphone. Please try Chrome, Firefox, or Edge.");
+        }
+
+        // Explicitly request microphone permissions first with a simpler configuration
+        console.log("Requesting initial microphone permission...");
+        try {
+            const permissionResult = await navigator.permissions.query({ name: 'microphone' });
+            console.log("Microphone permission status:", permissionResult.state);
+            
+            if (permissionResult.state === 'denied') {
+                throw new Error("Microphone permission denied. Please allow microphone access in your browser settings and reload the page.");
+            }
+        } catch (permErr) {
+            console.log("Permission query not supported or failed:", permErr);
+            // Continue anyway as not all browsers support permission API
+        }
+        
         // Request microphone permission - this shows the permission dialog to the user
+        console.log("Requesting microphone access stream...");
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 channelCount: 1,
@@ -59,6 +79,13 @@ async function initAudioWithUserInteraction() {
             },
             video: false
         });
+        
+        console.log("Microphone access granted, received stream with tracks:", stream.getAudioTracks().length);
+        
+        // Check if we actually got audio tracks
+        if (stream.getAudioTracks().length === 0) {
+            throw new Error("No audio tracks received from microphone. Please check your microphone connection.");
+        }
         
         // Load the AudioWorklet module once
         if (!await loadAudioWorklet()) {
@@ -82,6 +109,18 @@ async function initAudioWithUserInteraction() {
         return true;
     } catch (error) {
         console.error('Audio initialization error:', error);
+        
+        // Provide more specific error messages based on the error
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            dotNetReference?.invokeMethodAsync('OnAudioError', 'Microphone permission denied. Please allow microphone access in your browser settings and reload the page.');
+        } else if (error.name === 'NotFoundError') {
+            dotNetReference?.invokeMethodAsync('OnAudioError', 'No microphone detected. Please connect a microphone and reload the page.');
+        } else if (error.name === 'NotReadableError') {
+            dotNetReference?.invokeMethodAsync('OnAudioError', 'Microphone is busy or not readable. Please check if another application is using your microphone.');
+        } else {
+            dotNetReference?.invokeMethodAsync('OnAudioError', `Audio initialization failed: ${error.message}`);
+        }
+        
         audioInitialized = false;
         return false;
     }
@@ -131,6 +170,7 @@ async function startRecording(dotNetObj, intervalMs = 500) {
             console.log("Audio not initialized, initializing now");
             if (!await initAudioWithUserInteraction()) {
                 console.error("Failed to initialize audio");
+                dotNetReference?.invokeMethodAsync('OnAudioError', 'Failed to initialize audio. Please check microphone permissions and try again.');
                 return false;
             }
         }
@@ -138,26 +178,43 @@ async function startRecording(dotNetObj, intervalMs = 500) {
         // Ensure AudioContext is in running state
         if (!await ensureAudioContextResumed()) {
             console.error("Failed to resume AudioContext");
+            dotNetReference?.invokeMethodAsync('OnAudioError', 'Failed to resume audio context. Please reload the page and try again.');
             return false;
         }
         
         console.log("Requesting microphone access");
-        // Get microphone stream with specific parameters for OpenAI
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                channelCount: 1,
-                sampleRate: 24000, // Match OpenAI requirement
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            },
-            video: false
-        });
+        try {
+            // Get microphone stream with specific parameters for OpenAI
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 24000, // Match OpenAI requirement
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                },
+                video: false
+            });
+        } catch (err) {
+            console.error("Microphone access error:", err);
+            
+            // Provide user-friendly error messages based on the error
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                dotNetReference?.invokeMethodAsync('OnAudioError', 'Microphone permission denied. Please allow microphone access in your browser settings and reload the page.');
+            } else if (err.name === 'NotFoundError') {
+                dotNetReference?.invokeMethodAsync('OnAudioError', 'No microphone detected. Please connect a microphone and reload the page.');
+            } else {
+                dotNetReference?.invokeMethodAsync('OnAudioError', `Microphone access error: ${err.message}`);
+            }
+            
+            return false;
+        }
         
         console.log("Microphone access granted, creating processing pipeline");
         
         // Ensure the audio-processor worklet is loaded using our utility function
         if (!await loadAudioWorklet()) {
+            dotNetReference?.invokeMethodAsync('OnAudioError', 'Failed to load audio processing module.');
             throw new Error("Failed to load AudioWorklet module");
         }
         
@@ -170,6 +227,7 @@ async function startRecording(dotNetObj, intervalMs = 500) {
             console.log("AudioWorkletNode created successfully");
         } catch (err) {
             console.error("Failed to create AudioWorkletNode:", err);
+            dotNetReference?.invokeMethodAsync('OnAudioError', `Failed to create audio processing node: ${err.message}`);
             throw err; // Re-throw to be caught by the outer try-catch
         }
         
@@ -193,6 +251,7 @@ async function startRecording(dotNetObj, intervalMs = 500) {
             console.log("Audio processing pipeline connected");
         } catch (err) {
             console.error("Failed to connect audio nodes:", err);
+            dotNetReference?.invokeMethodAsync('OnAudioError', `Failed to set up audio processing: ${err.message}`);
             throw err;
         }
         

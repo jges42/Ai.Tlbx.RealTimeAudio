@@ -14,6 +14,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.gitignore = .gitignore
 		publish-nuget.ps1 = publish-nuget.ps1
 		README.md = README.md
+		version.txt = version.txt
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ai.Tlbx.RealTimeAudio.OpenAi", "Provider\Ai.Tlbx.RealTimeAudio.OpenAi\Ai.Tlbx.RealTimeAudio.OpenAi.csproj", "{79995214-3406-404E-0FE8-19B86858758D}"
@@ -66,4 +67,4 @@ Global
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8067B8B3-23AA-484C-AFB0-02D32E84F8C7}
 	EndGlobalSection
-EndGlobal 
+EndGlobal

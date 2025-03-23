@@ -3,10 +3,12 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Reflection;
+using Ai.Tlbx.RealTimeAudio.OpenAi.Models;
 
 namespace Ai.Tlbx.RealTimeAudio.OpenAi
 {
-    public class OpenAiRealTimeApiAccess : IDisposable
+    public class OpenAiRealTimeApiAccess : IAsyncDisposable
     {
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
@@ -14,16 +16,18 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         private readonly IAudioHardwareAccess _hardwareAccess;
         private readonly string _apiKey;
-        private string _currentVoice = "alloy";
         private bool _isInitialized = false;
         private bool _isRecording = false;
         private bool _isConnecting = false;
+        private bool _isDisposed = false;
         private string? _lastErrorMessage = null;
         private string _connectionStatus = string.Empty;
+        private OpenAiRealTimeSettings _settings = new OpenAiRealTimeSettings();
 
         private ClientWebSocket? _webSocket;
         private Task? _receiveTask;
         private CancellationTokenSource? _cts;
+        private CancellationTokenSource? _cancellationTokenSource;
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -48,17 +52,21 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         public string? LastErrorMessage => _lastErrorMessage;
         public string ConnectionStatus => _connectionStatus;
         public IReadOnlyList<OpenAiChatMessage> ChatHistory => _chatHistory.AsReadOnly();
+        
+        public OpenAiRealTimeSettings Settings => _settings;
 
-        public string CurrentVoice
+        // For backward compatibility
+        public TurnDetectionSettings TurnDetectionSettings
         {
-            get => _currentVoice;
+            get => _settings.TurnDetection;
+        }
+
+        public AssistantVoice CurrentVoice
+        {
+            get => _settings.Voice;
             set
             {
-                _currentVoice = value switch
-                {
-                    "alloy" or "ash" or "ballad" or "coral" or "echo" or "sage" or "shimmer" or "verse" => value,
-                    _ => throw new ArgumentException("Invalid voice. Supported voices are: alloy, ash, ballad, coral, echo, sage, shimmer, and verse.")
-                };
+                _settings.Voice = value;
                 SetVoice(value);
             }
         }
@@ -68,6 +76,9 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             _hardwareAccess = hardwareAccess;
             _apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ??
                 throw new InvalidOperationException("OPENAI_API_KEY not set");
+
+            // Subscribe to audio error events through the interface
+            _hardwareAccess.AudioError += OnAudioError;
         }
 
         public async Task InitializeConnection()
@@ -115,11 +126,18 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         /// <summary>
         /// Starts the full lifecycle - initializes the connection if needed and starts recording audio
         /// </summary>
-        public async Task Start()
+        /// <param name="settings">Optional settings to configure the API behavior</param>
+        public async Task Start(OpenAiRealTimeSettings? settings = null)
         {
             try
             {
                 _lastErrorMessage = null;
+                
+                // If settings are provided, store them for this session
+                if (settings != null)
+                {
+                    _settings = settings;
+                }
                 
                 if (!_isInitialized || _webSocket?.State != WebSocketState.Open)
                 {
@@ -167,6 +185,18 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         }
 
         /// <summary>
+        /// For backward compatibility - starts the session with just turn detection settings
+        /// </summary>
+        public async Task Start(TurnDetectionSettings? turnDetectionSettings)
+        {
+            if (turnDetectionSettings != null)
+            {
+                _settings.TurnDetection = turnDetectionSettings;
+            }
+            await Start();
+        }
+
+        /// <summary>
         /// Stops everything - clears audio queue, stops recording, and closes the connection
         /// </summary>
         public async Task Stop()
@@ -198,7 +228,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             }
         }
 
-        private void SetVoice(string voice)
+        private void SetVoice(AssistantVoice voice)
         {
             try
             {
@@ -209,13 +239,13 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     _ = SendAsync(new
                     {
                         type = "session.update",
-                        session = new { voice = _currentVoice }
+                        session = new { voice = _settings.GetVoiceString() }
                     });
-                    RaiseStatus($"Voice updated to: {_currentVoice}");
+                    RaiseStatus($"Voice updated to: {voice}");
                 }
                 else
                 {
-                    RaiseStatus($"Voice set to: {_currentVoice} (will be applied when connected)");
+                    RaiseStatus($"Voice set to: {voice} (will be applied when connected)");
                 }
             }
             catch (Exception ex)
@@ -227,68 +257,190 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         private async Task ConfigureSession()
         {
-            await SendAsync(new
+            var sessionConfig = new
             {
                 type = "session.update",
                 session = new
                 {
-                    turn_detection = new
-                    {
-                        type = "server_vad",
-                        threshold = 0.2,
-                        prefix_padding_ms = 500,
-                        silence_duration_ms = 300
-                    },
-                    voice = _currentVoice,
-                    modalities = new[] { "audio", "text" },
-                    input_audio_format = "pcm16",
-                    output_audio_format = "pcm16",
+                    turn_detection = BuildTurnDetectionConfig(),
+                    voice = _settings.GetVoiceString(),
+                    modalities = _settings.Modalities.ToArray(),
+                    input_audio_format = _settings.GetAudioFormatString(_settings.InputAudioFormat),
+                    output_audio_format = _settings.GetAudioFormatString(_settings.OutputAudioFormat),
                     input_audio_transcription = new
                     {
-                        model = "whisper-1"
+                        model = _settings.GetTranscriptionModelString()
                     },                    
-                    instructions = "You are a helpful AI assistant. Be friendly, conversational, helpful, and engaging."
+                    instructions = _settings.Instructions
                 }
-            });
-            RaiseStatus("Session configured with voice: " + _currentVoice + " and whisper transcription enabled");
+            };
+            
+            await SendAsync(sessionConfig);
+            
+            string turnTypeDesc = _settings.TurnDetection.Type switch 
+            {
+                TurnDetectionType.SemanticVad => "semantic VAD",
+                TurnDetectionType.ServerVad => "server VAD",
+                TurnDetectionType.None => "no turn detection",
+                _ => "unknown turn detection"
+            };
+            
+            RaiseStatus($"Session configured with voice: {_settings.GetVoiceString()} and {turnTypeDesc}");
+        }
+        
+        private object? BuildTurnDetectionConfig()
+        {
+            // If turn detection is disabled, return null
+            if (_settings.TurnDetection.Type == TurnDetectionType.None)
+            {
+                return null;
+            }
+            
+            // For semantic VAD
+            if (_settings.TurnDetection.Type == TurnDetectionType.SemanticVad)
+            {
+                return new 
+                {
+                    // Use "semantic_vad" as defined by JsonPropertyName attribute
+                    type = GetJsonPropertyName(_settings.TurnDetection.Type) ?? "semantic_vad",
+                    // Use value from JsonPropertyName attribute
+                    eagerness = GetJsonPropertyName(_settings.TurnDetection.Eagerness) ?? "auto",
+                    create_response = _settings.TurnDetection.CreateResponse,
+                    interrupt_response = _settings.TurnDetection.InterruptResponse
+                };
+            }
+            
+            // For server VAD
+            return new
+            {
+                // Use "server_vad" as defined by JsonPropertyName attribute
+                type = GetJsonPropertyName(_settings.TurnDetection.Type) ?? "server_vad",
+                threshold = _settings.TurnDetection.Threshold ?? 0.5f,
+                prefix_padding_ms = _settings.TurnDetection.PrefixPaddingMs ?? 300,
+                silence_duration_ms = _settings.TurnDetection.SilenceDurationMs ?? 500
+            };
+        }
+        
+        /// <summary>
+        /// Get the JsonPropertyName attribute value for an enum
+        /// </summary>
+        private string? GetJsonPropertyName<T>(T enumValue) where T : Enum
+        {
+            var enumType = typeof(T);
+            var memberInfo = enumType.GetMember(enumValue.ToString());
+            
+            if (memberInfo.Length > 0)
+            {
+                var attributes = memberInfo[0].GetCustomAttributes(typeof(JsonPropertyNameAttribute), false);
+                if (attributes.Length > 0)
+                {
+                    return ((JsonPropertyNameAttribute)attributes[0]).Name;
+                }
+            }
+            
+            return null;
         }
 
         private async Task Connect()
         {
+            int delayMs = 1000;  // Start with 1 second delay between retries
+            
             for (int i = 0; i < MAX_RETRY_ATTEMPTS; i++)
             {
                 try
                 {
+                    // Dispose of any existing WebSocket
+                    if (_webSocket != null)
+                    {
+                        try 
+                        {
+                            _webSocket.Dispose();
+                        }
+                        catch { /* Ignore any errors during disposal */ }
+                        _webSocket = null;
+                    }
+                    
+                    // Create a new WebSocket
                     _webSocket = new ClientWebSocket();
                     _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
                     _webSocket.Options.SetRequestHeader("openai-beta", "realtime=v1");
+                    
+                    // Set sensible timeouts
+                    _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+                    
+                    Console.WriteLine($"[WebSocket] Connecting to OpenAI API, attempt {i + 1} of {MAX_RETRY_ATTEMPTS}...");
+                    RaiseStatus($"Connecting to OpenAI API ({i + 1}/{MAX_RETRY_ATTEMPTS})...");
 
                     using var cts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
                     await _webSocket.ConnectAsync(
                         new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model=gpt-4o-realtime-preview-2024-12-17"),
                         cts.Token);
 
+                    Console.WriteLine("[WebSocket] Connected successfully");
+                    
+                    // Create a new cancellation token source for the receive task
+                    _cts?.Dispose();
                     _cts = new CancellationTokenSource();
+                    
+                    // Start the receive task
                     _receiveTask = ReceiveAsync(_cts.Token);
                     return;
                 }
-                catch (Exception ex)
+                catch (WebSocketException wsEx)
                 {
+                    // Handle WebSocket specific exceptions
                     _webSocket?.Dispose();
                     _webSocket = null;
-                    RaiseStatus($"Connect attempt {i + 1} failed: {ex.Message}");
+                    
+                    Console.WriteLine($"[WebSocket] WebSocket error on connect attempt {i + 1}: {wsEx.Message}, WebSocketErrorCode: {wsEx.WebSocketErrorCode}");
+                    RaiseStatus($"Connection error: {wsEx.Message}");
+                    
                     if (i < MAX_RETRY_ATTEMPTS - 1) 
                     {
-                        await Task.Delay(1000 * (1 << i));
+                        await Task.Delay(delayMs);
+                        delayMs = Math.Min(delayMs * 2, 10000); // Exponential backoff, max 10 seconds
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    // Connection timeout
+                    _webSocket?.Dispose();
+                    _webSocket = null;
+                    
+                    Console.WriteLine($"[WebSocket] Connection timeout on attempt {i + 1}");
+                    RaiseStatus($"Connection timeout");
+                    
+                    if (i < MAX_RETRY_ATTEMPTS - 1) 
+                    {
+                        await Task.Delay(delayMs);
+                        delayMs = Math.Min(delayMs * 2, 10000);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Handle other exceptions
+                    _webSocket?.Dispose();
+                    _webSocket = null;
+                    
+                    Console.WriteLine($"[WebSocket] Connect attempt {i + 1} failed: {ex.Message}");
+                    RaiseStatus($"Connection error: {ex.Message}");
+                    
+                    if (i < MAX_RETRY_ATTEMPTS - 1) 
+                    {
+                        await Task.Delay(delayMs);
+                        delayMs = Math.Min(delayMs * 2, 10000);
                     }
                 }
             }
-            throw new InvalidOperationException("Connection failed after retries");
+            
+            throw new InvalidOperationException("Connection failed after maximum retry attempts");
         }
 
         private async Task ReceiveAsync(CancellationToken ct)
         {
             var buffer = new byte[32384];
+            int consecutiveErrorCount = 0;
+            
             while (_webSocket?.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
                 try
@@ -298,17 +450,75 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     do
                     {
                         result = await _webSocket.ReceiveAsync(buffer, ct);
-                        if (result.MessageType == WebSocketMessageType.Close) return;
+                        if (result.MessageType == WebSocketMessageType.Close) 
+                        {
+                            Console.WriteLine($"[WebSocket] Received close message with status: {result.CloseStatus}, description: {result.CloseStatusDescription}");
+                            return;
+                        }
                         ms.Write(buffer, 0, result.Count);
                     } while (!result.EndOfMessage && _webSocket?.State == WebSocketState.Open);
 
                     var json = Encoding.UTF8.GetString(ms.ToArray());
                     await HandleMessageAsync(json);
+                    
+                    // Reset error counter on successful message
+                    consecutiveErrorCount = 0;
+                }
+                catch (WebSocketException wsEx)
+                {
+                    consecutiveErrorCount++;
+                    
+                    // Log but don't treat as critical if it's a normal closure
+                    if (wsEx.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
+                    {
+                        Console.WriteLine("[WebSocket] Connection closed prematurely by server");
+                        RaiseStatus("Connection closed by server, will attempt to reconnect if needed");
+                        break; // Exit the loop to allow reconnection logic to run
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[WebSocket] WebSocket error: {wsEx.Message}, ErrorCode: {wsEx.WebSocketErrorCode}");
+                        RaiseStatus($"WebSocket error: {wsEx.Message}");
+                        
+                        if (consecutiveErrorCount > 3)
+                        {
+                            RaiseStatus("Too many consecutive WebSocket errors, reconnecting...");
+                            // Force a reconnection
+                            break;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.WriteLine("[WebSocket] Receive operation canceled");
+                    break;
                 }
                 catch (Exception ex)
                 {
+                    consecutiveErrorCount++;
+                    Console.WriteLine($"[WebSocket] Receive error: {ex.Message}");
                     RaiseStatus($"Receive error: {ex.Message}");
+                    
+                    if (consecutiveErrorCount > 3)
+                    {
+                        RaiseStatus("Too many consecutive receive errors, reconnecting...");
+                        break;
+                    }
+                    
+                    // Add a small delay before trying again to avoid hammering the server
+                    await Task.Delay(500, CancellationToken.None);
                 }
+            }
+            
+            // If we exited the loop and the connection is still active, try to restart it
+            if (!ct.IsCancellationRequested && _isInitialized && _webSocket != null)
+            {
+                Console.WriteLine("[WebSocket] WebSocket loop exited, attempting to reconnect...");
+                _ = Task.Run(async () => 
+                {
+                    await Task.Delay(1000); // Wait a moment before reconnecting
+                    await ReconnectAsync();
+                }, CancellationToken.None);
             }
         }
 
@@ -511,13 +721,14 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     return;
                 }
 
-                Debug.WriteLine($"input_audio_buffer.append {e.Base64EncodedPcm16Audio.Length}");
-
+                // Send audio data to OpenAI
                 await SendAsync(new
                 {
                     type = "input_audio_buffer.append",
                     audio = e.Base64EncodedPcm16Audio
                 });
+                
+                Console.WriteLine($"[WebSocket] User audio chunk sent to OpenAI, size: {e.Base64EncodedPcm16Audio.Length} chars");
             }
             catch (Exception ex)
             {
@@ -551,56 +762,132 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 _isRecording = false;
                 
                 // First stop any ongoing recording
-                await _hardwareAccess.StopRecordingAudio();
+                try 
+                {
+                    await _hardwareAccess.StopRecordingAudio();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WebSocket] Error stopping recording during cleanup: {ex.Message}");
+                }
 
                 // Cancel the receive task if it exists
                 if (_cts != null)
                 {
-                    _cts.Cancel();
-                    
-                    if (_receiveTask != null)
+                    try
                     {
-                        try
+                        _cts.Cancel();
+                        
+                        if (_receiveTask != null)
                         {
-                            // Give the receive task a chance to complete gracefully
-                            await Task.WhenAny(_receiveTask, Task.Delay(2000));
+                            try
+                            {
+                                // Give the receive task a chance to complete gracefully
+                                await Task.WhenAny(_receiveTask, Task.Delay(2000));
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[WebSocket] Error waiting for receive task to complete: {ex.Message}");
+                            }
                         }
-                        catch (Exception ex)
-                        {
-                            RaiseStatus($"Error waiting for receive task to complete: {ex.Message}");
-                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WebSocket] Error canceling receive task: {ex.Message}");
                     }
                 }
 
                 // Close the WebSocket connection if it's open
-                if (_webSocket?.State == WebSocketState.Open)
+                if (_webSocket != null)
                 {
                     try
                     {
-                        await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Cleanup", CancellationToken.None);
+                        if (_webSocket.State == WebSocketState.Open)
+                        {
+                            try
+                            {
+                                var closeTask = _webSocket.CloseAsync(
+                                    WebSocketCloseStatus.NormalClosure, 
+                                    "Cleanup", 
+                                    CancellationToken.None);
+                                
+                                // Add a timeout to the close operation
+                                await Task.WhenAny(closeTask, Task.Delay(3000));
+                                
+                                if (!closeTask.IsCompleted)
+                                {
+                                    Console.WriteLine("[WebSocket] Close operation timed out");
+                                }
+                            }
+                            catch (WebSocketException wsEx)
+                            {
+                                Console.WriteLine($"[WebSocket] WebSocket error during close: {wsEx.Message}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[WebSocket] Error closing WebSocket: {ex.Message}");
+                            }
+                        }
+                        
+                        // Dispose WebSocket regardless of close success
+                        _webSocket.Dispose();
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) 
                     {
-                        RaiseStatus($"Error closing WebSocket: {ex.Message}");
+                        Console.WriteLine($"[WebSocket] Error disposing WebSocket: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _webSocket = null;
                     }
                 }
 
-                // Dispose of resources
-                _webSocket?.Dispose();
-                _webSocket = null;
-                _cts?.Dispose();
+                // Dispose of other resources
+                try
+                {
+                    _cts?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WebSocket] Error disposing CTS: {ex.Message}");
+                }
+                
                 _cts = null;
                 _receiveTask = null;
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"[WebSocket] Error during cleanup: {ex.Message}");
                 RaiseStatus($"Error during cleanup: {ex.Message}");
             }
         }
 
-        public async Task DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
-            await Cleanup();
+            if (_isDisposed) return;
+            
+            try
+            {
+                // Unsubscribe from audio error events
+                _hardwareAccess.AudioError -= OnAudioError;
+                
+                // Close the WebSocket connection if open
+                await StopWebSocketReceive();
+                
+                _webSocket?.Dispose();
+                _webSocket = null;
+                
+                // Cancel any operations
+                _cancellationTokenSource?.Cancel();
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = null;
+                
+                _isDisposed = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during disposal: {ex.Message}");
+            }
         }
 
         public void Dispose()
@@ -613,17 +900,20 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         {
             _connectionStatus = status;
 
-            bool isCriticalStatus = status.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
-                                    status.Contains("Failed", StringComparison.OrdinalIgnoreCase) ||
-                                    status.Contains("Exception", StringComparison.OrdinalIgnoreCase) ||
-                                    status.Contains("initialized", StringComparison.OrdinalIgnoreCase) ||
+            bool isError = status.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                          status.Contains("Failed", StringComparison.OrdinalIgnoreCase) ||
+                          status.Contains("Exception", StringComparison.OrdinalIgnoreCase);
+                          
+            bool isHighPriorityInfo = status.Contains("initialized", StringComparison.OrdinalIgnoreCase) ||
                                     status.Contains("Recording started", StringComparison.OrdinalIgnoreCase) ||
                                     status.Contains("Recording stopped", StringComparison.OrdinalIgnoreCase);
 
-            if (isCriticalStatus ||
-                (DateTime.Now - _lastStatusUpdate).TotalMilliseconds >= STATUS_UPDATE_INTERVAL_MS && status != _lastRaisedStatus)
+            bool shouldUpdate = isError || isHighPriorityInfo ||
+                (DateTime.Now - _lastStatusUpdate).TotalMilliseconds >= STATUS_UPDATE_INTERVAL_MS && status != _lastRaisedStatus;
+
+            if (shouldUpdate)
             {
-                if (isCriticalStatus)
+                if (isError)
                 {
                     _lastErrorMessage = status;
                     _isConnecting = false;
@@ -673,6 +963,166 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             _chatHistory.Clear();
             _currentAiMessage.Clear();
             _currentUserMessage.Clear();
+        }
+
+        // Handle audio hardware errors
+        private void OnAudioError(object? sender, string errorMessage)
+        {
+            _lastErrorMessage = errorMessage;
+            
+            // If we're in the middle of recording, stop it to avoid further issues
+            if (IsRecording)
+            {
+                Task.Run(async () => await Stop()).ConfigureAwait(false);
+            }
+        }
+
+        private async Task StopWebSocketReceive()
+        {
+            try
+            {
+                if (_cts != null)
+                {
+                    _cts.Cancel();
+                    _cts.Dispose();
+                    _cts = null;
+                }
+
+                if (_receiveTask != null)
+                {
+                    try
+                    {
+                        await Task.WhenAny(_receiveTask, Task.Delay(2000));
+                    }
+                    catch (Exception ex)
+                    {
+                        RaiseStatus($"Error waiting for receive task to complete: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RaiseStatus($"Error stopping WebSocket receive: {ex.Message}");
+            }
+        }
+
+        // Added to handle automatic reconnection when the WebSocket connection drops
+        private async Task ReconnectAsync()
+        {
+            try
+            {
+                Console.WriteLine("[WebSocket] Attempting to reconnect...");
+                RaiseStatus("Connection lost, attempting to reconnect...");
+                
+                // Clean up existing resources
+                await Cleanup();
+                
+                // Give a short delay before reconnecting
+                await Task.Delay(1000);
+                
+                // Try to reconnect
+                await Connect();
+                
+                // Reconfigure the session with the saved turn detection settings
+                await ConfigureSession();
+                
+                RaiseStatus("Successfully reconnected");
+                Console.WriteLine("[WebSocket] Reconnection successful");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WebSocket] Reconnection failed: {ex.Message}");
+                RaiseStatus($"Reconnection failed: {ex.Message}");
+                
+                // Try again with exponential backoff if we're still initialized
+                if (_isInitialized)
+                {
+                    _ = Task.Run(async () => 
+                    {
+                        await Task.Delay(5000); // Wait longer before the next attempt
+                        await ReconnectAsync();
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the turn detection settings without starting recording
+        /// </summary>
+        /// <param name="settings">The new turn detection settings to use</param>
+        /// <returns>A task representing the asynchronous operation</returns>
+        public async Task UpdateTurnDetectionSettings(TurnDetectionSettings settings)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+                
+            _settings.TurnDetection = settings;
+            
+            if (_isInitialized && _webSocket?.State == WebSocketState.Open)
+            {
+                // If we're already connected, update the session immediately
+                await SendAsync(new
+                {
+                    type = "session.update",
+                    session = new { turn_detection = BuildTurnDetectionConfig() }
+                });
+                
+                string turnTypeDesc = _settings.TurnDetection.Type switch 
+                {
+                    TurnDetectionType.SemanticVad => "semantic VAD",
+                    TurnDetectionType.ServerVad => "server VAD",
+                    TurnDetectionType.None => "no turn detection",
+                    _ => "unknown turn detection"
+                };
+                
+                RaiseStatus($"Turn detection updated to {turnTypeDesc}");
+            }
+        }
+        
+        /// <summary>
+        /// Updates all settings for the API
+        /// </summary>
+        /// <param name="settings">The new settings to use</param>
+        /// <returns>A task representing the asynchronous operation</returns>
+        public async Task UpdateSettings(OpenAiRealTimeSettings settings)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+                
+            // Store the settings
+            _settings = settings;
+            
+            // If we're already connected, update the session with all new settings
+            if (_isInitialized && _webSocket?.State == WebSocketState.Open)
+            {
+                await ConfigureSession();
+                RaiseStatus("Settings updated and applied");
+            }
+            else
+            {
+                RaiseStatus("Settings updated, will be applied when connected");
+            }
+        }
+        
+        /// <summary>
+        /// Validates that the settings are correct and complete
+        /// </summary>
+        /// <returns>True if settings are valid</returns>
+        public bool ValidateSettings()
+        {
+            if (_settings == null)
+                return false;
+                
+            // Check modalities
+            if (_settings.Modalities == null || _settings.Modalities.Count == 0)
+                return false;
+                
+            // Check instructions
+            if (string.IsNullOrWhiteSpace(_settings.Instructions))
+                return false;
+                
+            // Settings are valid
+            return true;
         }
     }    
 }

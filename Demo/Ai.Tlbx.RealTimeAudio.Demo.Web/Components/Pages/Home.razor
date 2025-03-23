@@ -1,5 +1,6 @@
 @page "/"
 @using Ai.Tlbx.RealTimeAudio.OpenAi
+@using Ai.Tlbx.RealTimeAudio.OpenAi.Models
 @rendermode InteractiveServer
 @inject OpenAiRealTimeApiAccess rta
 @inject IJSRuntime JS
@@ -44,7 +45,7 @@
                 <div class="mb-4">
                     <label for="voiceSelect" class="block text-sm font-medium text-gray-700 mb-1">Assistant Voice</label>
                     <select id="voiceSelect" class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
-                            @bind="rta.CurrentVoice" 
+                            @bind="CurrentVoiceString" 
                             disabled="@rta.IsConnecting">
                         <option value="alloy">Alloy</option>
                         <option value="ash">Ash</option>
@@ -84,7 +85,7 @@
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-green-600 mr-2" viewBox="0 0 20 20" fill="currentColor">
                                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
                             </svg>
-                            <span class="text-green-800">Connected with voice: <span class="font-semibold">@rta.CurrentVoice</span></span>
+                            <span class="text-green-800">Connected with voice: <span class="font-semibold">@currentVoiceString.ToUpper()[0] + currentVoiceString.Substring(1)</span></span>
                         </div>
                     </div>
                 }
@@ -168,11 +169,30 @@
 
 @code {
     private ElementReference chatContainer;
+    private string currentVoiceString = string.Empty;
 
     protected override void OnInitialized()
     {
         rta.ConnectionStatusChanged += OnConnectionStatusChanged;
         rta.MessageAdded += OnMessageAdded;
+        
+        // Initialize the string value based on the current enum value
+        currentVoiceString = rta.CurrentVoice.ToString().ToLower();
+    }
+
+    // Convert between string and enum
+    private string CurrentVoiceString
+    {
+        get => currentVoiceString;
+        set
+        {
+            currentVoiceString = value;
+            // Parse the string to the enum and update the API
+            if (Enum.TryParse<AssistantVoice>(value, true, out var voiceEnum))
+            {
+                rta.CurrentVoice = voiceEnum;
+            }
+        }
     }
 
     private void OnConnectionStatusChanged(object? sender, string status)

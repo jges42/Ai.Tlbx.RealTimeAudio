@@ -8,6 +8,11 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 {
     public interface IAudioHardwareAccess : IAsyncDisposable
     {
+        /// <summary>
+        /// Event that fires when an audio error occurs in the hardware
+        /// </summary>
+        event EventHandler<string>? AudioError;
+
         Task InitAudio();
 
         Task<bool> StartRecordingAudio(MicrophoneAudioReceivedEventHandler audioDataReceivedHandler);

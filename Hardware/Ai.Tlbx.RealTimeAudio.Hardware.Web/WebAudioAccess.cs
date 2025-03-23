@@ -21,6 +21,9 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
         
         // Store a reference to the DotNetObjectReference to prevent it from being garbage collected
         private DotNetObjectReference<WebAudioAccess>? _dotNetReference;
+        
+        // Event for audio errors
+        public event EventHandler<string>? AudioError;
 
         public WebAudioAccess(IJSRuntime jsRuntime)
         {
@@ -29,17 +32,40 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
 
         public async Task InitAudio()
         {
-            if (_audioModule == null)
+            try
             {
-                _audioModule = await _jsRuntime.InvokeAsync<IJSObjectReference>("import", "./js/webAudioAccess.js");
-                
-                // Make sure audio permissions are properly requested and the AudioContext is activated
-                var permissionResult = await _audioModule.InvokeAsync<bool>("initAudioWithUserInteraction");
-                if (!permissionResult)
+                if (_audioModule == null)
                 {
-                    throw new InvalidOperationException("Failed to initialize audio system. Microphone permission might be denied.");
+                    _audioModule = await _jsRuntime.InvokeAsync<IJSObjectReference>("import", "./js/webAudioAccess.js");
+                    
+                    // Create the .NET reference for JS callbacks before initializing
+                    if (_dotNetReference == null)
+                    {
+                        _dotNetReference = DotNetObjectReference.Create(this);
+                    }
+                    
+                    // Make sure audio permissions are properly requested and the AudioContext is activated
+                    var permissionResult = await _audioModule.InvokeAsync<bool>("initAudioWithUserInteraction");
+                    if (!permissionResult)
+                    {
+                        throw new InvalidOperationException("Failed to initialize audio system. Microphone permission might be denied.");
+                    }
                 }
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WebAudioAccess] Error initializing audio: {ex.Message}");
+                await OnAudioError($"Audio initialization failed: {ex.Message}");
+                throw;
+            }
+        }
+
+        [JSInvokable]
+        public Task OnAudioError(string errorMessage)
+        {
+            Console.WriteLine($"[WebAudioAccess] Audio error from JavaScript: {errorMessage}");
+            AudioError?.Invoke(this, errorMessage);
+            return Task.CompletedTask;
         }
 
         public async Task<bool> PlayAudio(string base64EncodedPcm16Audio)
@@ -67,12 +93,14 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
                 if (!_isPlaying)
                 {
                     _isPlaying = true;
-                    shouldPlayDirectly = true;                    
+                    shouldPlayDirectly = true;    
+                    Console.WriteLine("[WebAudioAccess] No audio currently playing, will play chunk directly");                
                 }
                 else
                 {
                     // Store both the audio data and sample rate
                     _audioQueue.Enqueue($"{base64EncodedPcm16Audio}|{sampleRate}");                    
+                    Console.WriteLine($"[WebAudioAccess] Audio chunk queued. Queue size: {_audioQueue.Count} items");
                 }
             }
 
@@ -80,6 +108,7 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
             {
                 if (shouldPlayDirectly)
                 {
+                    Console.WriteLine("[WebAudioAccess] Starting audio playback pipeline...");
                     await PlayAudioChunk(base64EncodedPcm16Audio, sampleRate);
                     await ProcessAudioQueue();
                 }
@@ -106,12 +135,13 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
 
         private async Task PlayAudioChunk(string base64EncodedPcm16Audio, int sampleRate = 24000)
         {
-            if( _audioModule == null) return;
+            if (_audioModule == null) return;
 
             try
-            {                 
+            {
+                Console.WriteLine($"[WebAudioAccess] Sending audio chunk to browser for playback. Size: {base64EncodedPcm16Audio.Length} chars");                 
                 await _audioModule.InvokeVoidAsync("playAudio", base64EncodedPcm16Audio, sampleRate);
-                
+                Console.WriteLine("[WebAudioAccess] Audio playback started in browser");
             }
             catch (JSDisconnectedException jsEx)
             {
@@ -186,10 +216,12 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
                     if (_audioQueue.Count > 0)
                     {
                         nextChunk = _audioQueue.Dequeue();
+                        Console.WriteLine($"[WebAudioAccess] Audio chunk dequeued. Remaining queue size: {_audioQueue.Count} items");
                     }
                     else
                     {
                         // No more chunks to process
+                        Console.WriteLine("[WebAudioAccess] All audio chunks processed, queue is empty");
                         return;
                     }
                 }
@@ -199,6 +231,9 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
                 string audioData = parts[0];
                 int sampleRate = parts.Length > 1 && int.TryParse(parts[1], out int rate) ? rate : 24000;
 
+                // Log audio chunk details
+                Console.WriteLine($"[WebAudioAccess] Processing audio chunk. Size: {audioData.Length} chars, Sample rate: {sampleRate} Hz");
+
                 // Play the chunk outside the lock
                 await PlayAudioChunk(audioData, sampleRate);
             }
@@ -206,50 +241,65 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
 
         public async Task<bool> StartRecordingAudio(MicrophoneAudioReceivedEventHandler audioDataReceivedHandler)
         {
-            if (_audioModule == null) throw new InvalidOperationException("Audio module not initialized");
-
-            if (_isRecording)
-            {
-                return false;
-            }
-
             try
             {
-                _audioDataReceivedHandler = audioDataReceivedHandler ??
-                    throw new ArgumentNullException(nameof(audioDataReceivedHandler));
-
-                // Create a reference to this object that JavaScript can call back into
-                // Store it in a field to prevent garbage collection
-                _dotNetReference = DotNetObjectReference.Create(this);
-                Console.WriteLine("[WebAudioAccess] Created DotNetObjectReference for JS callbacks");
-
-                // Make sure the AudioContext is resumed before starting recording
-                await _audioModule.InvokeVoidAsync("ensureAudioContextResumed");
-                
-                // Add a small delay to ensure everything is initialized
-                await Task.Delay(200);
-
-                // Start recording with a 200ms interval
-                Console.WriteLine("[WebAudioAccess] Calling startRecording with DotNetObjectReference");
-                bool success = await _audioModule.InvokeAsync<bool>("startRecording", _dotNetReference, 200);
-
-                if (success)
+                // Don't start if already recording
+                if (_isRecording)
                 {
-                    _isRecording = true;
-                    Console.WriteLine("[WebAudioAccess] Recording started successfully");
+                    Console.WriteLine("[WebAudioAccess] Already recording, ignoring start request");
                     return true;
                 }
-                else
+                
+                if (_audioModule == null)
                 {
-                    Console.WriteLine("[WebAudioAccess] Failed to start recording");
+                    await InitAudio();
+                }
+                
+                if (_audioModule == null)
+                {
+                    throw new InvalidOperationException("Audio module couldn't be initialized");
+                }
+                
+                // Set handler
+                _audioDataReceivedHandler = audioDataReceivedHandler;
+                
+                // Create the .NET reference if not already done
+                if (_dotNetReference == null)
+                {
+                    _dotNetReference = DotNetObjectReference.Create(this);
+                }
+                
+                // Start recording in JavaScript
+                try
+                {
+                    Console.WriteLine("[WebAudioAccess] Starting recording with JS using dotNetReference");
+                    var result = await _audioModule.InvokeAsync<bool>("startRecording", _dotNetReference, 500); // 500ms upload interval
+                    
+                    if (result)
+                    {
+                        Console.WriteLine("[WebAudioAccess] Recording started successfully");
+                        _isRecording = true;
+                        return true;
+                    }
+                    else
+                    {
+                        Console.WriteLine("[WebAudioAccess] Failed to start recording from JS");
+                        CleanupRecording();
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WebAudioAccess] Exception while starting recording: {ex.Message}");
+                    await OnAudioError($"Failed to start recording: {ex.Message}");
                     CleanupRecording();
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebAudioAccess] Error starting recording: {ex.Message}");
-                CleanupRecording();
+                Console.WriteLine($"[WebAudioAccess] Exception in StartRecordingAudio: {ex.Message}");
+                await OnAudioError($"Microphone access failed: {ex.Message}");
                 return false;
             }
         }
@@ -350,9 +400,12 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
             try
             {
                 // Clear the queue first
+                int queuedItems;
                 lock (_audioLock)
                 {
+                    queuedItems = _audioQueue.Count;
                     _audioQueue.Clear();
+                    Console.WriteLine($"[WebAudioAccess] Cleared audio queue with {queuedItems} pending items");
                 }
 
                 // Stop any current audio playback
