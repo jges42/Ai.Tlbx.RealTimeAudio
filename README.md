@@ -112,3 +112,7 @@ captureSession.StopCapture();
 ## License
 
 MIT 
+
+
+
+Live long and prosper 🖖
