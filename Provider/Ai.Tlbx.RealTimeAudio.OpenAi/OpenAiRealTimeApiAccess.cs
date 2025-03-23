@@ -263,6 +263,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 session = new
                 {
                     turn_detection = BuildTurnDetectionConfig(),
+                    model = "gpt-4o-realtime-preview-2024-12-17",
                     voice = _settings.GetVoiceString(),
                     modalities = _settings.Modalities.ToArray(),
                     input_audio_format = _settings.GetAudioFormatString(_settings.InputAudioFormat),
@@ -368,7 +369,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     // Set sensible timeouts
                     _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
                     
-                    Console.WriteLine($"[WebSocket] Connecting to OpenAI API, attempt {i + 1} of {MAX_RETRY_ATTEMPTS}...");
+                    Debug.WriteLine($"[WebSocket] Connecting to OpenAI API, attempt {i + 1} of {MAX_RETRY_ATTEMPTS}...");
                     RaiseStatus($"Connecting to OpenAI API ({i + 1}/{MAX_RETRY_ATTEMPTS})...");
 
                     using var cts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
@@ -376,7 +377,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model=gpt-4o-realtime-preview-2024-12-17"),
                         cts.Token);
 
-                    Console.WriteLine("[WebSocket] Connected successfully");
+                    Debug.WriteLine("[WebSocket] Connected successfully");
                     
                     // Create a new cancellation token source for the receive task
                     _cts?.Dispose();
@@ -392,7 +393,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     _webSocket?.Dispose();
                     _webSocket = null;
                     
-                    Console.WriteLine($"[WebSocket] WebSocket error on connect attempt {i + 1}: {wsEx.Message}, WebSocketErrorCode: {wsEx.WebSocketErrorCode}");
+                    Debug.WriteLine($"[WebSocket] WebSocket error on connect attempt {i + 1}: {wsEx.Message}, WebSocketErrorCode: {wsEx.WebSocketErrorCode}");
                     RaiseStatus($"Connection error: {wsEx.Message}");
                     
                     if (i < MAX_RETRY_ATTEMPTS - 1) 
@@ -407,7 +408,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     _webSocket?.Dispose();
                     _webSocket = null;
                     
-                    Console.WriteLine($"[WebSocket] Connection timeout on attempt {i + 1}");
+                    Debug.WriteLine($"[WebSocket] Connection timeout on attempt {i + 1}");
                     RaiseStatus($"Connection timeout");
                     
                     if (i < MAX_RETRY_ATTEMPTS - 1) 
@@ -422,7 +423,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     _webSocket?.Dispose();
                     _webSocket = null;
                     
-                    Console.WriteLine($"[WebSocket] Connect attempt {i + 1} failed: {ex.Message}");
+                    Debug.WriteLine($"[WebSocket] Connect attempt {i + 1} failed: {ex.Message}");
                     RaiseStatus($"Connection error: {ex.Message}");
                     
                     if (i < MAX_RETRY_ATTEMPTS - 1) 
@@ -452,7 +453,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         result = await _webSocket.ReceiveAsync(buffer, ct);
                         if (result.MessageType == WebSocketMessageType.Close) 
                         {
-                            Console.WriteLine($"[WebSocket] Received close message with status: {result.CloseStatus}, description: {result.CloseStatusDescription}");
+                            Debug.WriteLine($"[WebSocket] Received close message with status: {result.CloseStatus}, description: {result.CloseStatusDescription}");
                             return;
                         }
                         ms.Write(buffer, 0, result.Count);
@@ -471,13 +472,13 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     // Log but don't treat as critical if it's a normal closure
                     if (wsEx.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
                     {
-                        Console.WriteLine("[WebSocket] Connection closed prematurely by server");
+                        Debug.WriteLine("[WebSocket] Connection closed prematurely by server");
                         RaiseStatus("Connection closed by server, will attempt to reconnect if needed");
                         break; // Exit the loop to allow reconnection logic to run
                     }
                     else
                     {
-                        Console.WriteLine($"[WebSocket] WebSocket error: {wsEx.Message}, ErrorCode: {wsEx.WebSocketErrorCode}");
+                        Debug.WriteLine($"[WebSocket] WebSocket error: {wsEx.Message}, ErrorCode: {wsEx.WebSocketErrorCode}");
                         RaiseStatus($"WebSocket error: {wsEx.Message}");
                         
                         if (consecutiveErrorCount > 3)
@@ -490,13 +491,13 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 }
                 catch (OperationCanceledException)
                 {
-                    Console.WriteLine("[WebSocket] Receive operation canceled");
+                    Debug.WriteLine("[WebSocket] Receive operation canceled");
                     break;
                 }
                 catch (Exception ex)
                 {
                     consecutiveErrorCount++;
-                    Console.WriteLine($"[WebSocket] Receive error: {ex.Message}");
+                    Debug.WriteLine($"[WebSocket] Receive error: {ex.Message}");
                     RaiseStatus($"Receive error: {ex.Message}");
                     
                     if (consecutiveErrorCount > 3)
@@ -513,7 +514,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             // If we exited the loop and the connection is still active, try to restart it
             if (!ct.IsCancellationRequested && _isInitialized && _webSocket != null)
             {
-                Console.WriteLine("[WebSocket] WebSocket loop exited, attempting to reconnect...");
+                Debug.WriteLine("[WebSocket] WebSocket loop exited, attempting to reconnect...");
                 _ = Task.Run(async () => 
                 {
                     await Task.Delay(1000); // Wait a moment before reconnecting
@@ -529,37 +530,128 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 var doc = JsonDocument.Parse(json);
                 var type = doc.RootElement.GetProperty("type").GetString();
 
-                Console.WriteLine($"[WebSocket] Received message type: {type}");
-                
-                // Also log the full JSON for all messages to help with debugging
-                Console.WriteLine($"[WebSocket] Full message: {json}");
-
                 switch (type)
                 {
+                    case "error":
+                        // Extract and log detailed error information
+                        string errorMessage = "Unknown error";
+                        string errorType = "unknown";
+                        string errorCode = "unknown";                        
+                        
+                        if (doc.RootElement.TryGetProperty("error", out var errorObj))
+                        {
+                            if (errorObj.TryGetProperty("message", out var msgElement))
+                                errorMessage = msgElement.GetString() ?? errorMessage;
+                                
+                            if (errorObj.TryGetProperty("type", out var typeElement))
+                                errorType = typeElement.GetString() ?? errorType;
+                                
+                            if (errorObj.TryGetProperty("code", out var codeElement))
+                                errorCode = codeElement.GetString() ?? errorCode;                                
+                            
+                        }
+                        
+                        string errorDetails = $"Error: {errorType}, Code: {errorCode}, Message: {errorMessage}";
+                                                
+                        Debug.WriteLine($"[WebSocket] {errorDetails}");
+                        RaiseStatus($"OpenAI API Error: {errorMessage}");
+                        break;
+
+                    case "rate_limits.updated":
+                        Debug.WriteLine($"[WebSocket] Rate Limit Update: {json}");
+                        break;
+
                     case "response.audio.delta":
                         var audio = doc.RootElement.GetProperty("delta").GetString();
-                        Console.WriteLine($"[WebSocket] Audio delta received, length: {audio?.Length ?? 0}");
+                        Debug.WriteLine($"[WebSocket] Audio delta received, length: {audio?.Length ?? 0}");
                         if (!string.IsNullOrEmpty(audio))
                         {
                             try
                             {
-                                Console.WriteLine("[WebSocket] Attempting to play audio...");
+                                Debug.WriteLine("[WebSocket] Attempting to play audio...");
                                 await _hardwareAccess.PlayAudio(audio, 24000);
-                                Console.WriteLine("[WebSocket] PlayAudio called successfully");
+                                Debug.WriteLine("[WebSocket] PlayAudio called successfully");
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[WebSocket] ERROR playing audio: {ex.Message}");
-                                Console.WriteLine($"[WebSocket] Stack trace: {ex.StackTrace}");
+                                Debug.WriteLine($"[WebSocket] ERROR playing audio: {ex.Message}");
+                                Debug.WriteLine($"[WebSocket] Stack trace: {ex.StackTrace}");
                             }
                         }
                         break;
 
-                    case "response.audio.done":
-                        // The user has interrupted the AI response, so clear any queued audio
-                        Console.WriteLine("[WebSocket] Audio response completed or interrupted");
-                        RaiseStatus("Speech interrupted, clearing audio queue");
-                        await _hardwareAccess.ClearAudioQueue();
+                    case "response.audio_transcript.done":
+                        if ((doc.RootElement.TryGetProperty("transcript", out var spokenText)))
+                        {
+                            Debug.WriteLine($"[WebSocket] Transcript received: {spokenText}");
+                        }
+                        break;
+
+                    case "response.done":
+                        Debug.WriteLine("[WebSocket] Full response completed");
+                        try
+                        {
+                            // Extract server response text from the 'response.done' message
+                            if (doc.RootElement.TryGetProperty("response", out var responseObj) &&
+                                responseObj.TryGetProperty("output", out var outputArray) &&
+                                outputArray.GetArrayLength() > 0)
+                            {
+                                var firstOutput = outputArray[0];
+                                if (firstOutput.TryGetProperty("content", out var contentArray) &&
+                                    contentArray.GetArrayLength() > 0)
+                                {
+                                    StringBuilder fullText = new StringBuilder();
+                                    
+                                    // Process all content items
+                                    foreach (var content in contentArray.EnumerateArray())
+                                    {
+                                        // Handle text content
+                                        if (content.TryGetProperty("type", out var contentType))
+                                        {
+                                            string contentTypeStr = contentType.GetString() ?? string.Empty;
+                                            
+                                            if (contentTypeStr == "text" && content.TryGetProperty("text", out var textElement))
+                                            {
+                                                string text = textElement.GetString() ?? string.Empty;
+                                                fullText.Append(text);
+                                                Debug.WriteLine($"[WebSocket] Extracted text from response.done: {text}");
+                                            }
+                                            // Handle audio transcript
+                                            else if (contentTypeStr == "audio" && content.TryGetProperty("transcript", out var transcriptElement))
+                                            {
+                                                string transcript = transcriptElement.GetString() ?? string.Empty;
+                                                fullText.Append(transcript);
+                                                Debug.WriteLine($"[WebSocket] Extracted audio transcript from response.done: {transcript}");
+                                            }
+                                        }
+                                    }
+                                    
+                                    string completeMessage = fullText.ToString();
+                                    if (!string.IsNullOrWhiteSpace(completeMessage))
+                                    {
+                                        Debug.WriteLine($"[WebSocket] Final extracted message from response.done: {completeMessage}");
+                                        
+                                        // Add to chat history if new or different from last message
+                                        if (_chatHistory.Count == 0 || 
+                                           _chatHistory[_chatHistory.Count - 1].IsFromUser || 
+                                           _chatHistory[_chatHistory.Count - 1].Text != completeMessage)
+                                        {
+                                            var message = new OpenAiChatMessage(completeMessage, false);
+                                            _chatHistory.Add(message);
+                                            MessageAdded?.Invoke(this, message);
+                                            Debug.WriteLine("[WebSocket] Added message to chat history via response.done");
+                                        }
+                                        
+                                        // Clear the AI message buffer since we've got the complete message
+                                        _currentAiMessage.Clear();
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[WebSocket] Error processing response.done message: {ex.Message}");
+                        }
                         break;
 
                     case "response.text.delta":
@@ -568,7 +660,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         {
                             string deltaText = textElem.GetString() ?? string.Empty;
                             _currentAiMessage.Append(deltaText);
-                            Console.WriteLine($"[WebSocket] Text delta received: '{deltaText}'");
+                            Debug.WriteLine($"[WebSocket] Text delta received: '{deltaText}'");
                         }
                         break;
 
@@ -576,7 +668,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         if (_currentAiMessage.Length > 0)
                         {
                             string messageText = _currentAiMessage.ToString();
-                            Console.WriteLine($"[WebSocket] Text done received, message: '{messageText}'");
+                            Debug.WriteLine($"[WebSocket] Text done received, message: '{messageText}'");
                             
                             // Check if we should add this message to the chat history
                             // We might get both response.text.done and response.output_item.done,
@@ -588,7 +680,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                                 var message = new OpenAiChatMessage(messageText, false);
                                 _chatHistory.Add(message);
                                 MessageAdded?.Invoke(this, message);
-                                Console.WriteLine("[WebSocket] Added message to chat history via text.done");
+                                Debug.WriteLine("[WebSocket] Added message to chat history via text.done");
                             }
                             
                             _currentAiMessage.Clear();
@@ -610,11 +702,6 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         }
                         break;
 
-                    case "error":
-                        var errorMsg = doc.RootElement.GetProperty("error").GetProperty("message").GetString();
-                        RaiseStatus($"API Error: {errorMsg}");
-                        break;
-
                     case "input_audio_buffer.speech_started":
                         RaiseStatus("Speech detected");
                         await SendAsync(new
@@ -629,11 +716,11 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "conversation.item.start":
-                        Console.WriteLine("[WebSocket] New conversation item started");
+                        Debug.WriteLine("[WebSocket] New conversation item started");
                         if (doc.RootElement.TryGetProperty("role", out var roleElem))
                         {
                             string role = roleElem.GetString() ?? string.Empty;
-                            Console.WriteLine($"[WebSocket] Item role: {role}");
+                            Debug.WriteLine($"[WebSocket] Item role: {role}");
                             if (role == "assistant")
                             {
                                 // Reset AI message for new response
@@ -643,11 +730,11 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "conversation.item.end":
-                        Console.WriteLine("[WebSocket] Conversation item ended");
+                        Debug.WriteLine("[WebSocket] Conversation item ended");
                         break;
 
                     case "response.output_item.done":
-                        Console.WriteLine("[WebSocket] Received complete message from assistant");
+                        Debug.WriteLine("[WebSocket] Received complete message from assistant");
                         try
                         {
                             if (doc.RootElement.TryGetProperty("item", out var itemElem) && 
@@ -668,7 +755,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                                 }
                                 
                                 string messageText = completeMessage.ToString();
-                                Console.WriteLine($"[WebSocket] Complete message text: {messageText}");
+                                Debug.WriteLine($"[WebSocket] Complete message text: {messageText}");
                                 
                                 // Only add if we have content and haven't already added via deltas
                                 if (!string.IsNullOrWhiteSpace(messageText) && 
@@ -689,13 +776,13 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[WebSocket] Error processing complete message: {ex.Message}");
+                            Debug.WriteLine($"[WebSocket] Error processing complete message: {ex.Message}");
                         }
                         break;
 
                     default:
-                        if (DateTime.Now.Second % 10 == 0)
-                            RaiseStatus($"Received message: {type}");
+                        // Log all unhandled message types to debug output
+                        Debug.WriteLine($"[WebSocket] Unhandled message type: {type} - Content: {json.Substring(0, Math.Min(100, json.Length))}...");
                         break;
                 }
             }
@@ -727,8 +814,6 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     type = "input_audio_buffer.append",
                     audio = e.Base64EncodedPcm16Audio
                 });
-                
-                Console.WriteLine($"[WebSocket] User audio chunk sent to OpenAI, size: {e.Base64EncodedPcm16Audio.Length} chars");
             }
             catch (Exception ex)
             {
@@ -768,7 +853,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[WebSocket] Error stopping recording during cleanup: {ex.Message}");
+                    Debug.WriteLine($"[WebSocket] Error stopping recording during cleanup: {ex.Message}");
                 }
 
                 // Cancel the receive task if it exists
@@ -787,13 +872,13 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[WebSocket] Error waiting for receive task to complete: {ex.Message}");
+                                Debug.WriteLine($"[WebSocket] Error waiting for receive task to complete: {ex.Message}");
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[WebSocket] Error canceling receive task: {ex.Message}");
+                        Debug.WriteLine($"[WebSocket] Error canceling receive task: {ex.Message}");
                     }
                 }
 
@@ -816,16 +901,16 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                                 
                                 if (!closeTask.IsCompleted)
                                 {
-                                    Console.WriteLine("[WebSocket] Close operation timed out");
+                                    Debug.WriteLine("[WebSocket] Close operation timed out");
                                 }
                             }
                             catch (WebSocketException wsEx)
                             {
-                                Console.WriteLine($"[WebSocket] WebSocket error during close: {wsEx.Message}");
+                                Debug.WriteLine($"[WebSocket] WebSocket error during close: {wsEx.Message}");
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[WebSocket] Error closing WebSocket: {ex.Message}");
+                                Debug.WriteLine($"[WebSocket] Error closing WebSocket: {ex.Message}");
                             }
                         }
                         
@@ -834,7 +919,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                     }
                     catch (Exception ex) 
                     {
-                        Console.WriteLine($"[WebSocket] Error disposing WebSocket: {ex.Message}");
+                        Debug.WriteLine($"[WebSocket] Error disposing WebSocket: {ex.Message}");
                     }
                     finally
                     {
@@ -849,7 +934,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[WebSocket] Error disposing CTS: {ex.Message}");
+                    Debug.WriteLine($"[WebSocket] Error disposing CTS: {ex.Message}");
                 }
                 
                 _cts = null;
@@ -857,7 +942,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebSocket] Error during cleanup: {ex.Message}");
+                Debug.WriteLine($"[WebSocket] Error during cleanup: {ex.Message}");
                 RaiseStatus($"Error during cleanup: {ex.Message}");
             }
         }
@@ -886,7 +971,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during disposal: {ex.Message}");
+                Debug.WriteLine($"Error during disposal: {ex.Message}");
             }
         }
 
@@ -1011,7 +1096,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         {
             try
             {
-                Console.WriteLine("[WebSocket] Attempting to reconnect...");
+                Debug.WriteLine("[WebSocket] Attempting to reconnect...");
                 RaiseStatus("Connection lost, attempting to reconnect...");
                 
                 // Clean up existing resources
@@ -1027,11 +1112,11 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 await ConfigureSession();
                 
                 RaiseStatus("Successfully reconnected");
-                Console.WriteLine("[WebSocket] Reconnection successful");
+                Debug.WriteLine("[WebSocket] Reconnection successful");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebSocket] Reconnection failed: {ex.Message}");
+                Debug.WriteLine($"[WebSocket] Reconnection failed: {ex.Message}");
                 RaiseStatus($"Reconnection failed: {ex.Message}");
                 
                 // Try again with exponential backoff if we're still initialized

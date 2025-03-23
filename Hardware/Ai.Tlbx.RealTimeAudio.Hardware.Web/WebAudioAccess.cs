@@ -68,12 +68,6 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
             return Task.CompletedTask;
         }
 
-        public async Task<bool> PlayAudio(string base64EncodedPcm16Audio)
-        {
-            // Default to 24000 Hz sample rate for OpenAI Realtime API
-            return await PlayAudio(base64EncodedPcm16Audio, 24000);
-        }
-
         public async Task<bool> PlayAudio(string base64EncodedPcm16Audio, int sampleRate = 24000)
         {   
             if (_audioModule == null)
@@ -86,51 +80,43 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
                 return false;
             }
 
-            bool shouldPlayDirectly = false;
-
+            // Always enqueue the audio data
             lock (_audioLock)
             {
+                // Store both the audio data and sample rate
+                _audioQueue.Enqueue($"{base64EncodedPcm16Audio}|{sampleRate}");                    
+                Console.WriteLine($"[WebAudioAccess] Audio chunk queued. Queue size: {_audioQueue.Count} items");
+                
+                // If nothing is currently playing, start the audio processing
                 if (!_isPlaying)
                 {
                     _isPlaying = true;
-                    shouldPlayDirectly = true;    
-                    Console.WriteLine("[WebAudioAccess] No audio currently playing, will play chunk directly");                
-                }
-                else
-                {
-                    // Store both the audio data and sample rate
-                    _audioQueue.Enqueue($"{base64EncodedPcm16Audio}|{sampleRate}");                    
-                    Console.WriteLine($"[WebAudioAccess] Audio chunk queued. Queue size: {_audioQueue.Count} items");
+                    // Start audio processing in background without awaiting
+                    _ = Task.Run(async () => 
+                    {
+                        try
+                        {
+                            Console.WriteLine("[WebAudioAccess] Starting audio playback pipeline in background...");
+                            await ProcessAudioQueue();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[WebAudioAccess] Error in background playback: {ex.Message}");
+                        }
+                        finally
+                        {
+                            lock (_audioLock)
+                            {
+                                _isPlaying = false;
+                                Console.WriteLine("[WebAudioAccess] Playback finished, isPlaying set to false");
+                            }
+                        }
+                    });
                 }
             }
 
-            try
-            {
-                if (shouldPlayDirectly)
-                {
-                    Console.WriteLine("[WebAudioAccess] Starting audio playback pipeline...");
-                    await PlayAudioChunk(base64EncodedPcm16Audio, sampleRate);
-                    await ProcessAudioQueue();
-                }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[WebAudioAccess] Error playing audio: {ex.Message}");
-                Console.WriteLine($"[WebAudioAccess] Stack trace: {ex.StackTrace}");
-                return false;
-            }
-            finally
-            {
-                if (shouldPlayDirectly)
-                {
-                    lock (_audioLock)
-                    {
-                        _isPlaying = false;
-                        Console.WriteLine("[WebAudioAccess] Playback finished, isPlaying set to false");
-                    }
-                }
-            }
+            // Return immediately, audio will play asynchronously
+            return true;
         }
 
         private async Task PlayAudioChunk(string base64EncodedPcm16Audio, int sampleRate = 24000)
