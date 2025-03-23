@@ -1,5 +1,8 @@
 # Ai.Tlbx.RealTimeAudio
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![.NET](https://img.shields.io/badge/.NET-9.0-blue.svg)](https://dotnet.microsoft.com/download)
+
 A toolkit for real-time audio processing in .NET applications with seamless integration with AI services.
 
 ## GitHub Repository
@@ -11,6 +14,9 @@ A toolkit for real-time audio processing in .NET applications with seamless inte
 This toolkit offers the following NuGet packages:
 
 ### Ai.Tlbx.RealTimeAudio.OpenAi
+
+[![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.RealTimeAudio.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.OpenAi/)
+[![NuGet](https://img.shields.io/nuget/dt/Ai.Tlbx.RealTimeAudio.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.OpenAi/)
 
 Real-time audio processing library with OpenAI integration for speech recognition, transcription, and analysis.
 
@@ -52,6 +58,9 @@ await using (var audioStream = await openAiClient.CreateStreamingSessionAsync())
 ```
 
 ### Ai.Tlbx.RealTimeAudio.Hardware.Windows
+
+[![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.RealTimeAudio.Hardware.Windows.svg)](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.Hardware.Windows/)
+[![NuGet](https://img.shields.io/nuget/dt/Ai.Tlbx.RealTimeAudio.Hardware.Windows.svg)](https://www.nuget.org/packages/Ai.Tlbx.RealTimeAudio.Hardware.Windows/)
 
 Windows-specific hardware integration for real-time audio processing, supporting microphone access, audio device management, and low-latency playback.
 

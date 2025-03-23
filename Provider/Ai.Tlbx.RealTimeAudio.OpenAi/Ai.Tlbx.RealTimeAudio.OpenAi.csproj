@@ -7,7 +7,7 @@
     
     <!-- NuGet Package Metadata -->
     <PackageId>Ai.Tlbx.RealTimeAudio.OpenAi</PackageId>
-    <Version>1.0.5-g0b6fa21</Version>
+    <Version>1.1.1-g15e5297</Version>
     <Authors>Johannes Schmidt</Authors>
     <Company>TLBX</Company>
     <Description>Real-time audio processing library for OpenAI integration</Description>
