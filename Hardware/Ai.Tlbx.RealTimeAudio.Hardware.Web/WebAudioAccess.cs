@@ -68,7 +68,7 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Web
             return Task.CompletedTask;
         }
 
-        public async Task<bool> PlayAudio(string base64EncodedPcm16Audio, int sampleRate = 24000)
+        public bool PlayAudio(string base64EncodedPcm16Audio, int sampleRate = 24000)
         {   
             if (_audioModule == null)
             {                

@@ -578,7 +578,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                             try
                             {
                                 Debug.WriteLine("[WebSocket] Attempting to play audio...");
-                                await _hardwareAccess.PlayAudio(audio, 24000);
+                                _hardwareAccess.PlayAudio(audio, 24000);
                                 Debug.WriteLine("[WebSocket] PlayAudio called successfully");
                             }
                             catch (Exception ex)
@@ -1293,7 +1293,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 // Play back each chunk
                 foreach (var chunk in audioChunks)
                 {
-                    await _hardwareAccess.PlayAudio(chunk, 24000);
+                    _hardwareAccess.PlayAudio(chunk, 24000);
                     
                     // Check if canceled
                     if (_micTestCancellation.Token.IsCancellationRequested)

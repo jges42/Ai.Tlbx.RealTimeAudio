@@ -17,7 +17,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         Task<bool> StartRecordingAudio(MicrophoneAudioReceivedEventHandler audioDataReceivedHandler);
         
-        Task<bool> PlayAudio(string base64EncodedPcm16Audio, int sampleRate);
+        bool PlayAudio(string base64EncodedPcm16Audio, int sampleRate);
         
         Task<bool> StopRecordingAudio();
 
