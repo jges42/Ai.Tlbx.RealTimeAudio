@@ -158,10 +158,10 @@
                     {
                         @foreach (var message in rta.ChatHistory)
                         {
-                            <div class="mb-4 @(message.IsFromUser ? "flex justify-end" : "flex justify-start")">
-                                <div class="max-w-[80%] rounded-lg px-4 py-2 @(message.IsFromUser ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-800")">
-                                    <p>@message.Text</p>
-                                    <div class="text-xs @(message.IsFromUser ? "text-blue-200" : "text-gray-500") mt-1">
+                            <div class="mb-4 @(message.Role == "user" ? "flex justify-end" : "flex justify-start")">
+                                <div class="max-w-[80%] rounded-lg px-4 py-2 @(message.Role == "user" ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-800")">
+                                    <p>@message.Content</p>
+                                    <div class="text-xs @(message.Role == "user" ? "text-blue-200" : "text-gray-500") mt-1">
                                         @message.Timestamp.ToString("h:mm tt")
                                     </div>
                                 </div>

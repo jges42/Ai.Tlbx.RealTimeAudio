@@ -27,4 +27,12 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\Provider\Ai.Tlbx.RealTimeAudio.OpenAi\Ai.Tlbx.RealTimeAudio.OpenAi.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
 </Project>

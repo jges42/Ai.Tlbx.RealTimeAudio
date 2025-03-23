@@ -642,10 +642,10 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                                         
                                         // Add to chat history if new or different from last message
                                         if (_chatHistory.Count == 0 || 
-                                           _chatHistory[_chatHistory.Count - 1].IsFromUser || 
-                                           _chatHistory[_chatHistory.Count - 1].Text != completeMessage)
+                                           _chatHistory[_chatHistory.Count - 1].Role == "user" || 
+                                           _chatHistory[_chatHistory.Count - 1].Content != completeMessage)
                                         {
-                                            var message = new OpenAiChatMessage(completeMessage, false);
+                                            var message = new OpenAiChatMessage(completeMessage, "assistant");
                                             _chatHistory.Add(message);
                                             MessageAdded?.Invoke(this, message);
                                             Debug.WriteLine("[WebSocket] Added message to chat history via response.done");
@@ -683,10 +683,10 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                             // We might get both response.text.done and response.output_item.done,
                             // so we need to check if we've already added a message with this text
                             if (_chatHistory.Count == 0 || 
-                               _chatHistory[_chatHistory.Count - 1].IsFromUser || 
-                               _chatHistory[_chatHistory.Count - 1].Text != messageText)
+                               _chatHistory[_chatHistory.Count - 1].Role == "user" || 
+                               _chatHistory[_chatHistory.Count - 1].Content != messageText)
                             {
-                                var message = new OpenAiChatMessage(messageText, false);
+                                var message = new OpenAiChatMessage(messageText, "assistant");
                                 _chatHistory.Add(message);
                                 MessageAdded?.Invoke(this, message);
                                 Debug.WriteLine("[WebSocket] Added message to chat history via text.done");
@@ -702,7 +702,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                             string transcript = transcriptElem.GetString() ?? string.Empty;
                             if (!string.IsNullOrWhiteSpace(transcript))
                             {
-                                var message = new OpenAiChatMessage(transcript, true);
+                                var message = new OpenAiChatMessage(transcript, "user");
                                 _chatHistory.Add(message);
                                 MessageAdded?.Invoke(this, message);
                                 _currentUserMessage.Clear();
@@ -769,10 +769,10 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                                 // Only add if we have content and haven't already added via deltas
                                 if (!string.IsNullOrWhiteSpace(messageText) && 
                                     (_chatHistory.Count == 0 || 
-                                     _chatHistory[_chatHistory.Count - 1].IsFromUser || 
-                                     _chatHistory[_chatHistory.Count - 1].Text != messageText))
+                                     _chatHistory[_chatHistory.Count - 1].Role == "user" || 
+                                     _chatHistory[_chatHistory.Count - 1].Content != messageText))
                                 {
-                                    var message = new OpenAiChatMessage(messageText, false);
+                                    var message = new OpenAiChatMessage(messageText, "assistant");
                                     _chatHistory.Add(message);
                                     MessageAdded?.Invoke(this, message);
                                     
