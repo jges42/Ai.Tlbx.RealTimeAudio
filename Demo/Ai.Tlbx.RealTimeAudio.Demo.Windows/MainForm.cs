@@ -18,6 +18,9 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             // Create the audio hardware instance for Windows
             _audioHardware = new WindowsAudioHardware();
             
+            // Hook up audio error events directly
+            _audioHardware.AudioError += OnAudioError;
+            
             // Create the OpenAI service
             _audioService = new OpenAiRealTimeApiAccess(_audioHardware);
             
@@ -31,6 +34,22 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             
             // Initial UI state
             UpdateUIState();
+            
+            Debug.WriteLine("MainForm initialized");
+        }
+        
+        private void OnAudioError(object? sender, string errorMessage)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => OnAudioError(sender, errorMessage)));
+                return;
+            }
+            
+            // Display the error message in the UI
+            lblStatus.Text = $"Audio Error: {errorMessage}";
+            Debug.WriteLine($"Audio Error: {errorMessage}");
+            MessageBox.Show(errorMessage, "Audio Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         
         private void OnMessageAdded(object? sender, OpenAiChatMessage message)
@@ -55,6 +74,7 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             }
             
             lblStatus.Text = status;
+            Debug.WriteLine($"Connection status: {status}");
             UpdateUIState();
         }
         
@@ -67,6 +87,7 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             }
             
             lblStatus.Text = status;
+            Debug.WriteLine($"Mic test status: {status}");
             UpdateUIState();
         }
         
@@ -76,13 +97,22 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             {
                 btnTestMic.Enabled = false;
                 lblStatus.Text = "Testing microphone...";
+                Debug.WriteLine("Starting microphone test");
                 
-                await _audioService.TestMicrophone();
+                // Use only the OpenAiRealTimeApiAccess for microphone testing
+                bool success = await _audioService.TestMicrophone();
+                
+                if (!success)
+                {
+                    lblStatus.Text = "Microphone test failed";
+                    Debug.WriteLine("Microphone test failed");
+                }
             }
             catch (Exception ex)
             {
                 lblStatus.Text = $"Error testing microphone: {ex.Message}";
-                Debug.WriteLine($"Microphone test error: {ex}");
+                Debug.WriteLine($"Microphone test error: {ex.Message}\nStackTrace: {ex.StackTrace}");
+                MessageBox.Show($"Error testing microphone: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -102,6 +132,7 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             {
                 btnStart.Enabled = false;
                 lblStatus.Text = "Starting...";
+                Debug.WriteLine("Starting recording session");
                 
                 await _audioService.Start();
                 _isRecording = true;
@@ -110,7 +141,8 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             catch (Exception ex)
             {
                 lblStatus.Text = $"Error starting: {ex.Message}";
-                Debug.WriteLine($"Start recording error: {ex}");
+                Debug.WriteLine($"Start recording error: {ex.Message}\nStackTrace: {ex.StackTrace}");
+                MessageBox.Show($"Error starting recording: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -124,6 +156,7 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             {
                 btnInterrupt.Enabled = false;
                 lblStatus.Text = "Interrupting...";
+                Debug.WriteLine("Interrupting speech");
                 
                 await _audioService.InterruptSpeech();
                 lblStatus.Text = "Speech interrupted";
@@ -131,7 +164,8 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             catch (Exception ex)
             {
                 lblStatus.Text = $"Error interrupting: {ex.Message}";
-                Debug.WriteLine($"Interrupt error: {ex}");
+                Debug.WriteLine($"Interrupt error: {ex.Message}\nStackTrace: {ex.StackTrace}");
+                MessageBox.Show($"Error interrupting speech: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -150,6 +184,7 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             {
                 btnEnd.Enabled = false;
                 lblStatus.Text = "Ending recording...";
+                Debug.WriteLine("Ending recording session");
                 
                 await _audioService.Stop();
                 _isRecording = false;
@@ -158,7 +193,8 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
             catch (Exception ex)
             {
                 lblStatus.Text = $"Error ending recording: {ex.Message}";
-                Debug.WriteLine($"End recording error: {ex}");
+                Debug.WriteLine($"End recording error: {ex.Message}\nStackTrace: {ex.StackTrace}");
+                MessageBox.Show($"Error ending recording: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -186,6 +222,11 @@ namespace Ai.Tlbx.RealTimeAudio.Demo.Windows
                 _audioService.MessageAdded -= OnMessageAdded;
                 _audioService.ConnectionStatusChanged -= OnConnectionStatusChanged;
                 _audioService.MicrophoneTestStatusChanged -= OnMicrophoneTestStatusChanged;
+            }
+            
+            if (_audioHardware != null)
+            {
+                _audioHardware.AudioError -= OnAudioError;
             }
             
             base.OnFormClosing(e);

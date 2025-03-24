@@ -22,6 +22,9 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
         private MicrophoneAudioReceivedEventHandler _audioDataReceivedHandler;
         private readonly ConcurrentQueue<string> _audioQueue;
         private bool _isPlayingAudio;
+        private bool _isInitialized = false;
+        private MemoryStream _currentAudioStream;
+        private RawSourceWaveStream _currentWaveProvider;
         
         public event EventHandler<string> AudioError;
         
@@ -37,29 +40,43 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
         
         public async Task InitAudio()
         {
+            if (_isInitialized)
+            {
+                return;
+            }
+
             try
             {
+                Debug.WriteLine("Initializing Windows audio hardware...");
+                
+                // Check available input devices and log them
+                int deviceCount = WaveInEvent.DeviceCount;
+                if (deviceCount == 0)
+                {
+                    string error = "No audio input devices detected";
+                    Debug.WriteLine(error);
+                    AudioError?.Invoke(this, error);
+                    return;
+                }
+                
+                Debug.WriteLine($"Found {deviceCount} input devices:");
+                for (int i = 0; i < deviceCount; i++)
+                {
+                    var capabilities = WaveInEvent.GetCapabilities(i);
+                    Debug.WriteLine($"Device {i}: {capabilities.ProductName}");
+                }
+
                 // Initialize audio output
                 _waveOut = new WaveOutEvent();
-                _waveOut.PlaybackStopped += (s, e) => 
-                {
-                    if (_audioQueue.Count > 0 && !_isPlayingAudio)
-                    {
-                        PlayNextAudioFromQueue();
-                    }
-                };
                 
-                // Test microphone
-                bool micWorks = await TestMicrophoneAsync();
-                if (!micWorks)
-                {
-                    AudioError?.Invoke(this, "Microphone test failed. No microphone detected or access denied.");
-                }
+                _isInitialized = true;
+                Debug.WriteLine("Windows audio hardware initialized successfully");
             }
             catch (Exception ex)
             {
-                AudioError?.Invoke(this, $"Error initializing audio: {ex.Message}");
-                Debug.WriteLine($"Error initializing audio: {ex}");
+                string error = $"Error initializing audio: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
             }
         }
         
@@ -72,8 +89,24 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
             
             try
             {
+                if (!_isInitialized)
+                {
+                    await InitAudio();
+                    if (!_isInitialized)
+                    {
+                        return false;
+                    }
+                }
+
+                Debug.WriteLine("Starting audio recording with parameters:");
+                Debug.WriteLine($"  Sample rate: {_sampleRate}");
+                Debug.WriteLine($"  Channel count: {_channelCount}");
+                Debug.WriteLine($"  Bits per sample: {_bitsPerSample}");
+                
                 _audioDataReceivedHandler = audioDataReceivedHandler;
                 _cancellationTokenSource = new CancellationTokenSource();
+                
+                // Create new WaveInEvent with device 0 (default device)
                 _waveIn = new WaveInEvent
                 {
                     DeviceNumber = 0,
@@ -81,17 +114,28 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
                     BufferMilliseconds = 50
                 };
                 
+                // Handle potential errors
+                _waveIn.RecordingStopped += (s, e) =>
+                {
+                    if (e.Exception != null)
+                    {
+                        Debug.WriteLine($"Recording stopped with error: {e.Exception.Message}");
+                        AudioError?.Invoke(this, $"Recording error: {e.Exception.Message}");
+                    }
+                };
+                
                 _waveIn.DataAvailable += OnDataAvailable;
                 _waveIn.StartRecording();
                 _isRecording = true;
                 
-                Debug.WriteLine("Recording started");
+                Debug.WriteLine("Recording started successfully");
                 return true;
             }
             catch (Exception ex)
             {
-                AudioError?.Invoke(this, $"Error starting recording: {ex.Message}");
-                Debug.WriteLine($"Error starting recording: {ex}");
+                string error = $"Error starting recording: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
                 return false;
             }
         }
@@ -105,6 +149,8 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
             
             try
             {
+                Debug.WriteLine("Stopping audio recording...");
+                
                 _waveIn.StopRecording();
                 _waveIn.DataAvailable -= OnDataAvailable;
                 _waveIn.Dispose();
@@ -117,13 +163,14 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
                 _isRecording = false;
                 _audioDataReceivedHandler = null;
                 
-                Debug.WriteLine("Recording stopped");
+                Debug.WriteLine("Recording stopped successfully");
                 return true;
             }
             catch (Exception ex)
             {
-                AudioError?.Invoke(this, $"Error stopping recording: {ex.Message}");
-                Debug.WriteLine($"Error stopping recording: {ex}");
+                string error = $"Error stopping recording: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
                 return false;
             }
         }
@@ -132,6 +179,13 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
         {
             try
             {
+                if (string.IsNullOrEmpty(base64EncodedPcm16Audio))
+                {
+                    Debug.WriteLine("Warning: Attempted to play empty audio data");
+                    return false;
+                }
+                
+                Debug.WriteLine($"Queueing audio for playback, length: {base64EncodedPcm16Audio.Length}");
                 _audioQueue.Enqueue(base64EncodedPcm16Audio);
                 
                 if (!_isPlayingAudio)
@@ -143,8 +197,9 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
             }
             catch (Exception ex)
             {
-                AudioError?.Invoke(this, $"Error playing audio: {ex.Message}");
-                Debug.WriteLine($"Error playing audio: {ex}");
+                string error = $"Error playing audio: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
                 return false;
             }
         }
@@ -163,25 +218,80 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
             {
                 if (_audioQueue.TryDequeue(out string base64Audio))
                 {
+                    Debug.WriteLine($"Playing audio from queue, data length: {base64Audio.Length}");
                     byte[] audioData = Convert.FromBase64String(base64Audio);
                     
-                    using (var memoryStream = new MemoryStream(audioData))
-                    {
-                        var waveFormat = new WaveFormat(_sampleRate, _bitsPerSample, _channelCount);
-                        var waveProvider = new RawSourceWaveStream(memoryStream, waveFormat);
-                        var sampleProvider = waveProvider.ToSampleProvider();
-                        
-                        _waveOut.Stop();
-                        _waveOut.Init(sampleProvider);
-                        _waveOut.Play();
-                    }
+                    // Clean up previous resources
+                    DisposeCurrentPlayback();
+                    
+                    // Create new stream that will stay alive during playback
+                    _currentAudioStream = new MemoryStream(audioData);
+                    
+                    var waveFormat = new WaveFormat(_sampleRate, _bitsPerSample, _channelCount);
+                    Debug.WriteLine($"Creating raw source wave stream with format: {waveFormat}");
+                    
+                    _currentWaveProvider = new RawSourceWaveStream(_currentAudioStream, waveFormat);
+                    var sampleProvider = _currentWaveProvider.ToSampleProvider();
+                    
+                    // Handle playback completion to clean up resources
+                    _waveOut.PlaybackStopped -= OnPlaybackStopped;
+                    _waveOut.PlaybackStopped += OnPlaybackStopped;
+                    
+                    Debug.WriteLine("Initializing wave out player");
+                    _waveOut.Stop();
+                    _waveOut.Init(sampleProvider);
+                    _waveOut.Play();
+                    Debug.WriteLine("Audio playback started");
                 }
             }
             catch (Exception ex)
             {
                 _isPlayingAudio = false;
-                AudioError?.Invoke(this, $"Error playing audio from queue: {ex.Message}");
-                Debug.WriteLine($"Error playing audio from queue: {ex}");
+                string error = $"Error playing audio from queue: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
+            }
+        }
+        
+        private void OnPlaybackStopped(object sender, StoppedEventArgs e)
+        {
+            try
+            {
+                // Check if there's more audio to play
+                if (_audioQueue.Count > 0 && _isPlayingAudio)
+                {
+                    PlayNextAudioFromQueue();
+                }
+                else
+                {
+                    _isPlayingAudio = false;
+                    DisposeCurrentPlayback();
+                }
+                
+                if (e.Exception != null)
+                {
+                    Debug.WriteLine($"Playback stopped with error: {e.Exception.Message}");
+                    AudioError?.Invoke(this, $"Audio playback error: {e.Exception.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in playback stopped handler: {ex.Message}");
+            }
+        }
+        
+        private void DisposeCurrentPlayback()
+        {
+            if (_currentWaveProvider != null)
+            {
+                _currentWaveProvider.Dispose();
+                _currentWaveProvider = null;
+            }
+            
+            if (_currentAudioStream != null)
+            {
+                _currentAudioStream.Dispose();
+                _currentAudioStream = null;
             }
         }
         
@@ -189,98 +299,71 @@ namespace Ai.Tlbx.RealTimeAudio.Hardware.Windows
         {
             try
             {
+                Debug.WriteLine("Clearing audio queue...");
                 while (_audioQueue.TryDequeue(out _)) { }
                 
-                if (_waveOut != null && _isPlayingAudio)
+                if (_waveOut != null)
                 {
                     _waveOut.Stop();
+                    Debug.WriteLine("Stopped current audio playback");
                 }
                 
+                DisposeCurrentPlayback();
                 _isPlayingAudio = false;
+                Debug.WriteLine("Audio queue cleared");
             }
             catch (Exception ex)
             {
-                AudioError?.Invoke(this, $"Error clearing audio queue: {ex.Message}");
-                Debug.WriteLine($"Error clearing audio queue: {ex}");
+                string error = $"Error clearing audio queue: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
             }
         }
         
         private void OnDataAvailable(object sender, WaveInEventArgs e)
         {
-            if (e.BytesRecorded > 0 && _audioDataReceivedHandler != null)
+            try 
             {
-                try
+                if (e.BytesRecorded > 0 && _audioDataReceivedHandler != null)
                 {
                     var buffer = new byte[e.BytesRecorded];
                     Array.Copy(e.Buffer, buffer, e.BytesRecorded);
                     
                     // Convert to base64 for the event handler
                     string base64Audio = Convert.ToBase64String(buffer);
+                    Debug.WriteLine($"Audio data recorded: {e.BytesRecorded} bytes, base64 length: {base64Audio.Length}");
                     
                     _audioDataReceivedHandler?.Invoke(this, new MicrophoneAudioReceivedEvenArgs(base64Audio));
                 }
-                catch (Exception ex)
-                {
-                    AudioError?.Invoke(this, $"Error processing audio data: {ex.Message}");
-                    Debug.WriteLine($"Error processing audio data: {ex}");
-                }
             }
-        }
-        
-        private Task<bool> TestMicrophoneAsync()
-        {
-            return Task.Run(() =>
+            catch (Exception ex)
             {
-                try
-                {
-                    using (var testWaveIn = new WaveInEvent())
-                    {
-                        testWaveIn.DeviceNumber = 0;
-                        testWaveIn.WaveFormat = new WaveFormat(_sampleRate, _bitsPerSample, _channelCount);
-                        
-                        bool deviceWorks = false;
-                        var resetEvent = new ManualResetEvent(false);
-                        
-                        testWaveIn.DataAvailable += (s, e) =>
-                        {
-                            if (e.BytesRecorded > 0)
-                            {
-                                deviceWorks = true;
-                                resetEvent.Set();
-                            }
-                        };
-                        
-                        testWaveIn.StartRecording();
-                        
-                        resetEvent.WaitOne(TimeSpan.FromSeconds(2));
-                        testWaveIn.StopRecording();
-                        
-                        return deviceWorks;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AudioError?.Invoke(this, $"Error testing microphone: {ex.Message}");
-                    Debug.WriteLine($"Error testing microphone: {ex.Message}");
-                    return false;
-                }
-            });
+                string error = $"Error processing audio data: {ex.Message}";
+                Debug.WriteLine($"{error}\nStackTrace: {ex.StackTrace}");
+                AudioError?.Invoke(this, error);
+            }
         }
         
         public async ValueTask DisposeAsync()
         {
             try
             {
+                Debug.WriteLine("Disposing Windows audio hardware...");
                 await StopRecordingAudio();
                 
                 if (_waveOut != null)
                 {
+                    _waveOut.PlaybackStopped -= OnPlaybackStopped;
                     _waveOut.Stop();
                     _waveOut.Dispose();
                     _waveOut = null;
+                    Debug.WriteLine("Wave out player disposed");
                 }
                 
+                DisposeCurrentPlayback();
                 while (_audioQueue.TryDequeue(out _)) { }
+                _isInitialized = false;
+                Debug.WriteLine("Windows audio hardware disposed");
             }
             catch (Exception ex)
             {
