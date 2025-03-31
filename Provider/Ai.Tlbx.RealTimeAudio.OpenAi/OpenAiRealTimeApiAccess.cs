@@ -872,83 +872,90 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         }
                         break;
 
-                    case "tool_calls":
-                        Debug.WriteLine($"[WebSocket] Received tool calls message: {json.Substring(0, Math.Min(200, json.Length))}...");
-                        if (root.TryGetProperty("tool_calls", out var toolCallsArray) && toolCallsArray.ValueKind == JsonValueKind.Array)
+                    case "response.function_call_arguments.delta":
+                        // Streaming mode for function call arguments - we could accumulate these if needed
+                        Debug.WriteLine($"[WebSocket] Received function call arguments delta");
+                        break;
+
+                    case "response.function_call_arguments.done":
+                        Debug.WriteLine($"[WebSocket] Received complete function call arguments: {json.Substring(0, Math.Min(200, json.Length))}...");
+                        if (root.TryGetProperty("arguments", out var argsElement) && 
+                            root.TryGetProperty("call_id", out var callIdElement))
                         {
-                            // Process each requested tool call
-                            foreach (var toolCallElement in toolCallsArray.EnumerateArray())
+                            string callId = callIdElement.GetString() ?? string.Empty;
+                            string argumentsJson = argsElement.GetString() ?? "{}";
+                            string functionName = string.Empty;
+                            
+                            // Try to extract function name if available
+                            if (root.TryGetProperty("item_id", out var itemIdElement))
                             {
-                                if (TryParseToolCall(toolCallElement, out var toolCallId, out var functionName, out var argumentsJson))
+                                // Some implementations may send function name differently
+                                // We might need to extract it from arguments or other sources
+                                functionName = itemIdElement.GetString() ?? string.Empty;
+                            }
+                            
+                            // Add Tool Call message to history
+                            var toolCallMessage = OpenAiChatMessage.CreateToolCallMessage(callId, functionName, argumentsJson);
+                            _chatHistory.Add(toolCallMessage);
+                            MessageAdded?.Invoke(this, toolCallMessage); // Notify UI
+                            
+                            // Find the tool in the registered tools - by name or try to determine from arguments
+                            var tool = FindToolForArguments(functionName, argumentsJson);
+                            
+                            if (tool != null)
+                            {
+                                // Execute the tool directly
+                                Debug.WriteLine($"[Tooling] Executing tool: {tool.Name} (ID: {callId})");
+                                try
                                 {
-                                    // Add Tool Call message to history
-                                    var toolCallMessage = OpenAiChatMessage.CreateToolCallMessage(toolCallId, functionName, argumentsJson);
-                                    _chatHistory.Add(toolCallMessage);
-                                    MessageAdded?.Invoke(this, toolCallMessage); // Notify UI
+                                    // Execute the tool
+                                    string result = await tool.ExecuteAsync(argumentsJson);
                                     
-                                    // Find the tool in the registered tools
-                                    var tool = _settings.RegisteredTools.FirstOrDefault(t => t.Name == functionName);
+                                    // Add Tool Result message to history
+                                    var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(callId, tool.Name, result);
+                                    _chatHistory.Add(toolResultMessage);
+                                    MessageAdded?.Invoke(this, toolResultMessage); // Notify UI
                                     
-                                    if (tool != null)
-                                    {
-                                        // Execute the tool directly
-                                        Debug.WriteLine($"[Tooling] Executing tool: {functionName} (ID: {toolCallId})");
-                                        try
-                                        {
-                                            // Execute the tool
-                                            string result = await tool.ExecuteAsync(argumentsJson);
-                                            
-                                            // Add Tool Result message to history
-                                            var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, result);
-                                            _chatHistory.Add(toolResultMessage);
-                                            MessageAdded?.Invoke(this, toolResultMessage); // Notify UI
-                                            
-                                            // Send the result back to OpenAI
-                                            await SendToolResultAsync(toolCallId, result);
-                                            
-                                            // Notify any listeners about the tool result
-                                            ToolResultAvailable?.Invoke(this, (functionName, result));
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Debug.WriteLine($"[Tooling] Error executing tool '{functionName}' (ID: {toolCallId}): {ex.Message}");
-                                            string errorResult = JsonSerializer.Serialize(new { error = $"Failed to execute tool: {ex.Message}" });
-                                            
-                                            // Add a failure message
-                                            var toolErrorMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, errorResult);
-                                            _chatHistory.Add(toolErrorMessage);
-                                            MessageAdded?.Invoke(this, toolErrorMessage);
-                                            
-                                            // Send the error back to OpenAI
-                                            await SendToolResultAsync(toolCallId, errorResult);
-                                        }
-                                    }
-                                    else if (ToolCallRequested != null)
-                                    {
-                                        // If we don't have the tool implementation but external handlers are subscribed
-                                        // Notify external subscribers 
-                                        ToolCallRequested?.Invoke(this, new ToolCallEventArgs(toolCallId, functionName, argumentsJson));
-                                    }
-                                    else
-                                    {
-                                        // No tool handler available
-                                        Debug.WriteLine($"[Tooling] No tool implementation for '{functionName}' (ID: {toolCallId}).");
-                                        string errorResult = JsonSerializer.Serialize(new { error = $"No tool implementation for '{functionName}'." });
-                                        
-                                        // Add a result message indicating failure
-                                        var toolNotFoundMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, errorResult);
-                                        _chatHistory.Add(toolNotFoundMessage);
-                                        MessageAdded?.Invoke(this, toolNotFoundMessage);
-                                        
-                                        // Send the error result back to OpenAI
-                                        await SendToolResultAsync(toolCallId, errorResult);
-                                    }
+                                    // Send the result back to OpenAI using the correct format
+                                    await SendToolResultAsync(callId, result);
+                                    
+                                    // Notify any listeners about the tool result
+                                    ToolResultAvailable?.Invoke(this, (tool.Name, result));
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.WriteLine($"[Tooling] Error executing tool '{tool.Name}' (ID: {callId}): {ex.Message}");
+                                    string errorResult = JsonSerializer.Serialize(new { error = $"Failed to execute tool: {ex.Message}" });
+                                    
+                                    // Add a failure message
+                                    var toolErrorMessage = OpenAiChatMessage.CreateToolResultMessage(callId, tool.Name, errorResult);
+                                    _chatHistory.Add(toolErrorMessage);
+                                    MessageAdded?.Invoke(this, toolErrorMessage);
+                                    
+                                    // Send the error back to OpenAI
+                                    await SendToolResultAsync(callId, errorResult);
                                 }
                             }
-                        }
-                        else
-                        {
-                            Debug.WriteLine($"[WebSocket] 'tool_calls' property missing or not an array in tool_calls message.");
+                            else if (ToolCallRequested != null)
+                            {
+                                // If we don't have the tool implementation but external handlers are subscribed
+                                // Notify external subscribers 
+                                ToolCallRequested?.Invoke(this, new ToolCallEventArgs(callId, functionName, argumentsJson));
+                            }
+                            else
+                            {
+                                // No tool handler available
+                                Debug.WriteLine($"[Tooling] No tool implementation for call ID: {callId}");
+                                string errorResult = JsonSerializer.Serialize(new { error = "No tool implementation available." });
+                                
+                                // Add a result message indicating failure
+                                var toolNotFoundMessage = OpenAiChatMessage.CreateToolResultMessage(callId, "unknown_tool", errorResult);
+                                _chatHistory.Add(toolNotFoundMessage);
+                                MessageAdded?.Invoke(this, toolNotFoundMessage);
+                                
+                                // Send the error result back to OpenAI
+                                await SendToolResultAsync(callId, errorResult);
+                            }
                         }
                         break;
 
@@ -1557,70 +1564,83 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         }
 
         /// <summary>
-        /// Sends the result of a tool execution back to OpenAI and adds it to the chat history.
+        /// Finds a tool implementation based on function name or argument content.
         /// </summary>
-        /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
-        /// <param name="toolName">The name of the tool that was called.</param>
-        /// <param name="result">The result of the tool execution (often a JSON string).</param>
-        /// <returns>A task representing the asynchronous operation.</returns>
-        public async Task HandleToolResultAsync(string toolCallId, string toolName, string result)
+        /// <param name="functionName">The name of the function if available</param>
+        /// <param name="argumentsJson">The JSON string containing the arguments</param>
+        /// <returns>The matching tool or null if not found</returns>
+        private BaseTool? FindToolForArguments(string functionName, string argumentsJson)
         {
-            if (string.IsNullOrEmpty(toolCallId) || string.IsNullOrEmpty(toolName))
+            // First try to find by name if available
+            if (!string.IsNullOrEmpty(functionName))
             {
-                Debug.WriteLine("[Tooling] Tool call ID or name is empty. Cannot handle result.");
-                return;
+                var tool = _settings.RegisteredTools.FirstOrDefault(t => t.Name == functionName);
+                if (tool != null)
+                {
+                    return tool;
+                }
             }
 
+            // If no name or not found by name, try to determine from arguments
+            // This is a fallback mechanism in case the name isn't provided
             try
             {
-                // Add a message to chat history for the tool result
-                var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, toolName, result);
-                _chatHistory.Add(toolResultMessage);
-                MessageAdded?.Invoke(this, toolResultMessage);
-
-                // Send the result back to OpenAI
-                await SendToolResultAsync(toolCallId, result);
-
-                // Notify any listeners about the tool result
-                ToolResultAvailable?.Invoke(this, (toolName, result));
+                using var doc = JsonDocument.Parse(argumentsJson);
+                // Here you could check for specific properties in the arguments
+                // that might indicate which tool to use
+                
+                // This approach is very implementation-specific and may not be reliable
+                // Future versions might enhance this with more sophisticated matching
+                
+                // For now, if we have only one registered tool, assume it's the one we want
+                if (_settings.RegisteredTools.Count == 1)
+                {
+                    return _settings.RegisteredTools[0];
+                }
             }
-            catch (Exception ex)
+            catch (JsonException)
             {
-                Debug.WriteLine($"[Tooling] Error handling tool result: {ex.Message}");
-                RaiseStatus($"Error handling tool result: {ex.Message}");
+                // If we can't parse the arguments, we can't determine the tool
             }
+            
+            // No matching tool found
+            return null;
         }
 
         /// <summary>
-        /// Sends the result of a tool execution back to OpenAI.
+        /// Sends the result of a tool execution back to OpenAI using the correct message format.
         /// </summary>
-        /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
-        /// <param name="result">The result of the tool execution (often a JSON string).</param>
-        public async Task SendToolResultAsync(string toolCallId, string result)
+        /// <param name="callId">The ID of the function call to respond to.</param>
+        /// <param name="result">The result of the function execution.</param>
+        public async Task SendToolResultAsync(string callId, string result)
         {
             if (_webSocket?.State != WebSocketState.Open)
             {
-                RaiseStatus("Cannot send tool result: WebSocket is not open.");
-                Debug.WriteLine("[WebSocket] Attempted to send tool result, but socket is not open.");
+                RaiseStatus("Cannot send function result: WebSocket is not open.");
+                Debug.WriteLine("[WebSocket] Attempted to send function result, but socket is not open.");
                 return;
             }
 
-            if (string.IsNullOrEmpty(toolCallId))
+            if (string.IsNullOrEmpty(callId))
             {
-                 Debug.WriteLine("[WebSocket] Attempted to send tool result with empty toolCallId.");
-                 // Optionally raise an error or log more prominently
+                 Debug.WriteLine("[WebSocket] Attempted to send function result with empty callId.");
                  return;
             }
 
-            var toolResultMessage = new
+            // Using the correct message format for the Realtime API
+            var functionResultMessage = new
             {
-                type = "tool_result",
-                tool_call_id = toolCallId,
-                result = result // The content of the result
+                type = "conversation.item.create",
+                item = new
+                {
+                    type = "function_call_output",
+                    call_id = callId,
+                    output = result // The actual output from the function
+                }
             };
 
-            Debug.WriteLine($"[WebSocket] Sending tool result for ID: {toolCallId}, Result: {result.Substring(0, Math.Min(100, result.Length))}...");
-            await SendAsync(toolResultMessage);
+            Debug.WriteLine($"[WebSocket] Sending function result for call ID: {callId}, Result: {result.Substring(0, Math.Min(100, result.Length))}...");
+            await SendAsync(functionResultMessage);
         }
 
         /// <summary>
@@ -1682,6 +1702,41 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 
             // Settings are valid
             return true;
+        }
+
+        /// <summary>
+        /// Handles the result of a tool execution by adding it to the chat history and sending it to OpenAI.
+        /// </summary>
+        /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
+        /// <param name="toolName">The name of the tool that was called.</param>
+        /// <param name="result">The result of the tool execution (often a JSON string).</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        public async Task HandleToolResultAsync(string toolCallId, string toolName, string result)
+        {
+            if (string.IsNullOrEmpty(toolCallId) || string.IsNullOrEmpty(toolName))
+            {
+                Debug.WriteLine("[Tooling] Tool call ID or name is empty. Cannot handle result.");
+                return;
+            }
+
+            try
+            {
+                // Add a message to chat history for the tool result
+                var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, toolName, result);
+                _chatHistory.Add(toolResultMessage);
+                MessageAdded?.Invoke(this, toolResultMessage);
+
+                // Send the result back to OpenAI
+                await SendToolResultAsync(toolCallId, result);
+
+                // Notify any listeners about the tool result
+                ToolResultAvailable?.Invoke(this, (toolName, result));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Tooling] Error handling tool result: {ex.Message}");
+                RaiseStatus($"Error handling tool result: {ex.Message}");
+            }
         }
     }    
 }

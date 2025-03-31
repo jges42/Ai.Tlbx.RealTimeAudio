@@ -24,8 +24,8 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Tools.BuiltInTools
         {
             // Arguments are ignored.
             // Return the current UTC time in a standard format (ISO 8601 is good for APIs)
-            var currentTime = DateTime.UtcNow.ToString("o"); 
-            return Task.FromResult(currentTime);
+            var currentTime = DateTime.UtcNow.ToString("HH:mm:ss"); 
+            return Task.FromResult("The current time is: " + currentTime);
         }
     }
 } 
