@@ -7,7 +7,7 @@
     
     <!-- NuGet Package Metadata -->
     <PackageId>Ai.Tlbx.RealTimeAudio.Hardware.Windows</PackageId>
-    <Version>1.2.3-g2bacdda</Version>
+    <Version>2.0.1-g5ca9b1c</Version>
     <Authors>Johannes Schmidt</Authors>
     <Company>TLBX</Company>
     <Description>Windows-specific hardware integration for real-time audio processing</Description>

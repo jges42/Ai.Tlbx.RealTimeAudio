@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Linq;
 
 namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
 {
@@ -44,6 +45,11 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
         /// Instructions for the assistant
         /// </summary>
         public string Instructions { get; set; } = "You are a helpful AI assistant. Be friendly, conversational, helpful, and engaging.";
+        
+        /// <summary>
+        /// List of tools the assistant can use.
+        /// </summary>
+        public List<OpenAiToolDefinition> Tools { get; set; } = new List<OpenAiToolDefinition>();
         
         /// <summary>
         /// Creates a default settings object
@@ -109,7 +115,8 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
                 Voice = this.Voice,
                 InputAudioFormat = this.InputAudioFormat,
                 OutputAudioFormat = this.OutputAudioFormat,
-                Instructions = this.Instructions
+                Instructions = this.Instructions,
+                Tools = this.Tools.Select(t => t).ToList()
             };
             
             // Clone the turn detection settings

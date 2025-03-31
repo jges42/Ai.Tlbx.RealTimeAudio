@@ -8,6 +8,23 @@ using Ai.Tlbx.RealTimeAudio.OpenAi.Models;
 
 namespace Ai.Tlbx.RealTimeAudio.OpenAi
 {
+    /// <summary>
+    /// Event arguments for when OpenAI requests a tool call.
+    /// </summary>
+    public class ToolCallEventArgs : EventArgs
+    {
+        public string ToolCallId { get; } // Unique ID for this specific call
+        public string FunctionName { get; } // Name of the function/tool requested
+        public string ArgumentsJson { get; } // Arguments as a JSON string
+
+        public ToolCallEventArgs(string toolCallId, string functionName, string argumentsJson)
+        {
+            ToolCallId = toolCallId;
+            FunctionName = functionName;
+            ArgumentsJson = argumentsJson;
+        }
+    }
+
     public class OpenAiRealTimeApiAccess : IAsyncDisposable
     {
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
@@ -51,6 +68,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         public event EventHandler<string>? ConnectionStatusChanged;
         public event EventHandler<OpenAiChatMessage>? MessageAdded;
         public event EventHandler<string>? MicrophoneTestStatusChanged;
+        public event EventHandler<ToolCallEventArgs>? ToolCallRequested; // New event for tool calls
 
         // Public readonly properties to expose internal state
         public bool IsInitialized => _isInitialized;
@@ -266,25 +284,37 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         private async Task ConfigureSession()
         {
+            // Build the session configuration dynamically
+            var sessionData = new Dictionary<string, object>
+            {
+                { "model", "gpt-4o-realtime-preview-2024-12-17" }, // Consider making model configurable
+                { "voice", _settings.GetVoiceString() },
+                { "modalities", _settings.Modalities.ToArray() },
+                { "input_audio_format", _settings.GetAudioFormatString(_settings.InputAudioFormat) },
+                { "output_audio_format", _settings.GetAudioFormatString(_settings.OutputAudioFormat) },
+                { "input_audio_transcription", new { model = _settings.GetTranscriptionModelString() } },
+                { "instructions", _settings.Instructions }
+            };
+
+            // Add turn detection if configured
+            var turnDetectionConfig = BuildTurnDetectionConfig();
+            if (turnDetectionConfig != null)
+            {
+                sessionData.Add("turn_detection", turnDetectionConfig);
+            }
+
+            // Add tools if defined
+            if (_settings.Tools != null && _settings.Tools.Count > 0)
+            {
+                sessionData.Add("tools", _settings.Tools);
+            }
+
             var sessionConfig = new
             {
                 type = "session.update",
-                session = new
-                {
-                    turn_detection = BuildTurnDetectionConfig(),
-                    model = "gpt-4o-realtime-preview-2024-12-17",
-                    voice = _settings.GetVoiceString(),
-                    modalities = _settings.Modalities.ToArray(),
-                    input_audio_format = _settings.GetAudioFormatString(_settings.InputAudioFormat),
-                    output_audio_format = _settings.GetAudioFormatString(_settings.OutputAudioFormat),
-                    input_audio_transcription = new
-                    {
-                        model = _settings.GetTranscriptionModelString()
-                    },                    
-                    instructions = _settings.Instructions
-                }
+                session = sessionData
             };
-            
+
             await SendAsync(sessionConfig);
             
             string turnTypeDesc = _settings.TurnDetection.Type switch 
@@ -294,8 +324,10 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 TurnDetectionType.None => "no turn detection",
                 _ => "unknown turn detection"
             };
-            
-            RaiseStatus($"Session configured with voice: {_settings.GetVoiceString()} and {turnTypeDesc}");
+
+            string toolsDesc = (_settings.Tools != null && _settings.Tools.Count > 0) ? $" with {_settings.Tools.Count} tool(s)" : "";
+
+            RaiseStatus($"Session configured with voice: {_settings.GetVoiceString()}, {turnTypeDesc}{toolsDesc}");
         }
         
         private object? BuildTurnDetectionConfig()
@@ -536,8 +568,18 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         {
             try
             {
-                var doc = JsonDocument.Parse(json);
-                var type = doc.RootElement.GetProperty("type").GetString();
+                // Using JsonDocument which is disposable
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                // Basic check for "type" property
+                if (!root.TryGetProperty("type", out var typeElement) || typeElement.ValueKind != JsonValueKind.String)
+                {
+                    Debug.WriteLine($"[WebSocket] Received message without a valid 'type' property: {json.Substring(0, Math.Min(100, json.Length))}...");
+                    return;
+                }
+                
+                var type = typeElement.GetString();
 
                 switch (type)
                 {
@@ -545,23 +587,23 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         // Extract and log detailed error information
                         string errorMessage = "Unknown error";
                         string errorType = "unknown";
-                        string errorCode = "unknown";                        
-                        
-                        if (doc.RootElement.TryGetProperty("error", out var errorObj))
+                        string errorCode = "unknown";
+
+                        if (root.TryGetProperty("error", out var errorObj))
                         {
                             if (errorObj.TryGetProperty("message", out var msgElement))
                                 errorMessage = msgElement.GetString() ?? errorMessage;
-                                
-                            if (errorObj.TryGetProperty("type", out var typeElement))
-                                errorType = typeElement.GetString() ?? errorType;
-                                
+
+                            if (errorObj.TryGetProperty("type", out var errorTypeElement))
+                                errorType = errorTypeElement.GetString() ?? errorType;
+
                             if (errorObj.TryGetProperty("code", out var codeElement))
-                                errorCode = codeElement.GetString() ?? errorCode;                                
-                            
+                                errorCode = codeElement.GetString() ?? errorCode;
+
                         }
-                        
+
                         string errorDetails = $"Error: {errorType}, Code: {errorCode}, Message: {errorMessage}";
-                                                
+
                         Debug.WriteLine($"[WebSocket] {errorDetails}");
                         RaiseStatus($"OpenAI API Error: {errorMessage}");
                         break;
@@ -571,7 +613,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "response.audio.delta":
-                        var audio = doc.RootElement.GetProperty("delta").GetString();
+                        var audio = root.GetProperty("delta").GetString();
                         Debug.WriteLine($"[WebSocket] Audio delta received, length: {audio?.Length ?? 0}");
                         if (!string.IsNullOrEmpty(audio))
                         {
@@ -590,7 +632,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "response.audio_transcript.done":
-                        if ((doc.RootElement.TryGetProperty("transcript", out var spokenText)))
+                        if (root.TryGetProperty("transcript", out var spokenText))
                         {
                             Debug.WriteLine($"[WebSocket] Transcript received: {spokenText}");
                         }
@@ -601,7 +643,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         try
                         {
                             // Extract server response text from the 'response.done' message
-                            if (doc.RootElement.TryGetProperty("response", out var responseObj) &&
+                            if (root.TryGetProperty("response", out var responseObj) &&
                                 responseObj.TryGetProperty("output", out var outputArray) &&
                                 outputArray.GetArrayLength() > 0)
                             {
@@ -664,7 +706,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "response.text.delta":
-                        if (doc.RootElement.TryGetProperty("delta", out var deltaElem) && 
+                        if (root.TryGetProperty("delta", out var deltaElem) && 
                             deltaElem.TryGetProperty("text", out var textElem))
                         {
                             string deltaText = textElem.GetString() ?? string.Empty;
@@ -697,7 +739,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         break;
 
                     case "conversation.item.input_audio_transcription.completed":
-                        if (doc.RootElement.TryGetProperty("transcript", out var transcriptElem))
+                        if (root.TryGetProperty("transcript", out var transcriptElem))
                         {
                             string transcript = transcriptElem.GetString() ?? string.Empty;
                             if (!string.IsNullOrWhiteSpace(transcript))
@@ -726,7 +768,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
                     case "conversation.item.start":
                         Debug.WriteLine("[WebSocket] New conversation item started");
-                        if (doc.RootElement.TryGetProperty("role", out var roleElem))
+                        if (root.TryGetProperty("role", out var roleElem))
                         {
                             string role = roleElem.GetString() ?? string.Empty;
                             Debug.WriteLine($"[WebSocket] Item role: {role}");
@@ -746,7 +788,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         Debug.WriteLine("[WebSocket] Received complete message from assistant");
                         try
                         {
-                            if (doc.RootElement.TryGetProperty("item", out var itemElem) && 
+                            if (root.TryGetProperty("item", out var itemElem) && 
                                 itemElem.TryGetProperty("content", out var contentArray))
                             {
                                 StringBuilder completeMessage = new StringBuilder();
@@ -789,15 +831,61 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         }
                         break;
 
+                    case "tool_calls":
+                        Debug.WriteLine($"[WebSocket] Received tool calls message: {json.Substring(0, Math.Min(200, json.Length))}...");
+                        if (root.TryGetProperty("tool_calls", out var toolCallsArray) && toolCallsArray.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var toolCallElement in toolCallsArray.EnumerateArray())
+                            {
+                                if (toolCallElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.String &&
+                                    toolCallElement.TryGetProperty("type", out var toolTypeElement) && toolTypeElement.GetString() == "function" && // Currently only function is supported
+                                    toolCallElement.TryGetProperty("function", out var functionElement) && functionElement.ValueKind == JsonValueKind.Object &&
+                                    functionElement.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String &&
+                                    functionElement.TryGetProperty("arguments", out var argsElement) && argsElement.ValueKind == JsonValueKind.String)
+                                {
+                                    string toolCallId = idElement.GetString() ?? string.Empty;
+                                    string functionName = nameElement.GetString() ?? string.Empty;
+                                    string argumentsJson = argsElement.GetString() ?? string.Empty;
+
+                                    if (!string.IsNullOrEmpty(toolCallId) && !string.IsNullOrEmpty(functionName))
+                                    {
+                                        Debug.WriteLine($"[WebSocket] Raising ToolCallRequested event: ID={toolCallId}, Function={functionName}, Args={argumentsJson}");
+                                        ToolCallRequested?.Invoke(this, new ToolCallEventArgs(toolCallId, functionName, argumentsJson));
+                                    }
+                                    else
+                                    {
+                                         Debug.WriteLine($"[WebSocket] Failed to parse tool call details: ID or Function Name missing.");
+                                    }
+                                }
+                                else
+                                {
+                                     Debug.WriteLine($"[WebSocket] Could not parse tool call structure in message element: {toolCallElement.GetRawText()}");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"[WebSocket] 'tool_calls' property missing or not an array in tool_calls message.");
+                        }
+                        break;
+
                     default:
                         // Log all unhandled message types to debug output
                         Debug.WriteLine($"[WebSocket] Unhandled message type: {type} - Content: {json.Substring(0, Math.Min(100, json.Length))}...");
                         break;
                 }
             }
+            catch (JsonException jsonEx)
+            {
+                 RaiseStatus($"Error parsing JSON message: {jsonEx.Message}. JSON: {json.Substring(0, Math.Min(100, json.Length))}...");
+                 Debug.WriteLine($"[WebSocket] JSON Parse Error: {jsonEx.Message} for JSON: {json}");
+            }
             catch (Exception ex)
             {
+                // Catching generic Exception should be done carefully. Ensure specific exceptions are handled above.
                 RaiseStatus($"Error handling message: {ex.Message}. JSON: {json.Substring(0, Math.Min(100, json.Length))}...");
+                Debug.WriteLine($"[WebSocket] General Error Handling Message: {ex.Message} for JSON: {json}");
+                Debug.WriteLine($"[WebSocket] StackTrace: {ex.StackTrace}");
             }
         }
 
@@ -1350,6 +1438,38 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         {
             Debug.WriteLine($"[MicTest] {status}");
             MicrophoneTestStatusChanged?.Invoke(this, status);
+        }
+
+        /// <summary>
+        /// Sends the result of a tool execution back to OpenAI.
+        /// </summary>
+        /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
+        /// <param name="result">The result of the tool execution (often a JSON string).</param>
+        public async Task SendToolResultAsync(string toolCallId, string result)
+        {
+            if (_webSocket?.State != WebSocketState.Open)
+            {
+                RaiseStatus("Cannot send tool result: WebSocket is not open.");
+                Debug.WriteLine("[WebSocket] Attempted to send tool result, but socket is not open.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(toolCallId))
+            {
+                 Debug.WriteLine("[WebSocket] Attempted to send tool result with empty toolCallId.");
+                 // Optionally raise an error or log more prominently
+                 return;
+            }
+
+            var toolResultMessage = new
+            {
+                type = "tool_result",
+                tool_call_id = toolCallId,
+                result = result // The content of the result
+            };
+
+            Debug.WriteLine($"[WebSocket] Sending tool result for ID: {toolCallId}, Result: {result.Substring(0, Math.Min(100, result.Length))}...");
+            await SendAsync(toolResultMessage);
         }
     }    
 }
