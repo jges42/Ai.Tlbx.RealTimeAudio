@@ -15,8 +15,14 @@ public class Program
             .AddInteractiveServerComponents();
 
 
-        builder.Services.AddScoped<IAudioHardwareAccess,WebAudioAccess>();
-        builder.Services.AddScoped<OpenAiRealTimeApiAccess>();
+        builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
+        
+        // Register OpenAiRealTimeApiAccess with hardware access
+        builder.Services.AddScoped(sp => 
+        {
+            var hardwareAccess = sp.GetRequiredService<IAudioHardwareAccess>();
+            return new OpenAiRealTimeApiAccess(hardwareAccess); 
+        });
 
         builder.Services.AddSignalR(options =>
         {

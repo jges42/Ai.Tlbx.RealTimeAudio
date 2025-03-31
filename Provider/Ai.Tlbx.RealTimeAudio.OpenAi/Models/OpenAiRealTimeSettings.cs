@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Linq;
+using Ai.Tlbx.RealTimeAudio.OpenAi.Tools;
 
 namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
 {
@@ -50,6 +51,12 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
         /// List of tools the assistant can use.
         /// </summary>
         public List<OpenAiToolDefinition> Tools { get; set; } = new List<OpenAiToolDefinition>();
+        
+        /// <summary>
+        /// List of tool implementation objects for registered tools.
+        /// This property is used to maintain references to the actual tool implementation objects.
+        /// </summary>
+        public List<BaseTool> RegisteredTools { get; set; } = new List<BaseTool>();
         
         /// <summary>
         /// Creates a default settings object
@@ -116,7 +123,8 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi.Models
                 InputAudioFormat = this.InputAudioFormat,
                 OutputAudioFormat = this.OutputAudioFormat,
                 Instructions = this.Instructions,
-                Tools = this.Tools.Select(t => t).ToList()
+                Tools = this.Tools.Select(t => t).ToList(),
+                RegisteredTools = this.RegisteredTools.ToList()
             };
             
             // Clone the turn detection settings

@@ -1,6 +1,9 @@
 @page "/"
 @using Ai.Tlbx.RealTimeAudio.OpenAi
 @using Ai.Tlbx.RealTimeAudio.OpenAi.Models
+@using Ai.Tlbx.RealTimeAudio.OpenAi.Tools
+@using Ai.Tlbx.RealTimeAudio.OpenAi.Tools.BuiltInTools
+@using Ai.Tlbx.RealTimeAudio.OpenAi.Tools.Models
 @rendermode InteractiveServer
 @inject OpenAiRealTimeApiAccess rta
 @inject IJSRuntime JS
@@ -17,15 +20,15 @@
                 
                 <div class="flex gap-2 mb-4">
                     <button class="flex-1 py-2 px-4 rounded-md @(rta.IsRecording ? "bg-gray-500" : "bg-blue-600") text-white font-medium hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center" 
-                            @onclick="Start" 
+                            @onclick="StartSession"
                             disabled="@(rta.IsRecording || rta.IsConnecting)">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd" />
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 1.414L10.586 9H7a1 1 0 100 2h3.586l-1.293 1.293a1 1 0 101.414 1.414l3-3a1 1 0 000-1.414z" clip-rule="evenodd" />
                         </svg>
                         Start
                     </button>
                     <button class="flex-1 py-2 px-4 rounded-md @(rta.IsRecording ? "bg-red-600" : "bg-gray-500") text-white font-medium hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center" 
-                            @onclick="Stop" 
+                            @onclick="StopSession"
                             disabled="@(!rta.IsRecording || rta.IsConnecting)">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" />
@@ -33,7 +36,7 @@
                         Stop
                     </button>
                     <button class="flex-1 py-2 px-4 rounded-md bg-amber-500 text-white font-medium hover:bg-opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center" 
-                            @onclick="Interrupt"
+                            @onclick="InterruptSpeech"
                             disabled="@(!rta.IsInitialized || rta.IsConnecting)">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
                             <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
@@ -59,6 +62,13 @@
                         <option value="shimmer">Shimmer</option>
                         <option value="verse">Verse</option>
                     </select>
+                </div>
+
+                <div class="mb-4 flex items-center">
+                    <input type="checkbox" id="timeToolCheck" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2" 
+                           @bind="useTimeTool" 
+                           disabled="@rta.IsRecording"> 
+                    <label for="timeToolCheck" class="text-sm font-medium text-gray-700">Enable Current Time Tool</label>
                 </div>
 
                 <div class="mt-4">
@@ -142,14 +152,12 @@
                     <h3 class="text-xl font-bold text-gray-800">Conversation</h3>
                 </div>
                 
-                <div class="flex-1 p-4 overflow-y-auto" id="chat-messages" @ref="chatContainer">
+                <div class="flex-1 p-4 overflow-y-auto space-y-4" id="chat-messages" @ref="chatContainer">
                     @if (!rta.ChatHistory.Any())
                     {
                         <div class="h-full flex items-center justify-center text-gray-500">
                             <div class="text-center">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                                </svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                                 <p>Start speaking to begin a conversation</p>
                             </div>
                         </div>
@@ -158,14 +166,64 @@
                     {
                         @foreach (var message in rta.ChatHistory)
                         {
-                            <div class="mb-4 @(message.Role == "user" ? "flex justify-end" : "flex justify-start")">
-                                <div class="max-w-[80%] rounded-lg px-4 py-2 @(message.Role == "user" ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-800")">
-                                    <p>@message.Content</p>
-                                    <div class="text-xs @(message.Role == "user" ? "text-blue-200" : "text-gray-500") mt-1">
-                                        @message.Timestamp.ToString("h:mm tt")
+                            @if (message.Role == OpenAiChatMessage.UserRole)
+                            {
+                                <!-- User Message -->
+                                <div class="flex justify-end">
+                                    <div class="max-w-[80%] rounded-lg px-4 py-2 bg-blue-600 text-white">
+                                        <p class="whitespace-pre-wrap">@message.Content</p>
+                                        <div class="text-xs text-blue-200 mt-1 text-right">
+                                            @message.Timestamp.ToString("h:mm tt")
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                            }
+                            else if (message.Role == OpenAiChatMessage.AssistantRole)
+                            {
+                                <!-- Assistant Message -->
+                                <div class="flex justify-start">
+                                    <div class="max-w-[80%] rounded-lg px-4 py-2 bg-gray-200 text-gray-800">
+                                        <p class="whitespace-pre-wrap">@message.Content</p>
+                                        <div class="text-xs text-gray-500 mt-1">
+                                            @message.Timestamp.ToString("h:mm tt")
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                            else if (message.Role == OpenAiChatMessage.ToolCallRole)
+                            {
+                                <!-- Tool Call Message -->
+                                <div class="flex justify-center">
+                                    <div class="w-[90%] rounded-md px-3 py-2 bg-purple-100 text-purple-800 border border-purple-200 text-sm">
+                                        <div class="flex items-center font-medium mb-1">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10h6c2 0 2.343 2.343 2.343 2.343m-1.171 4.314A8 8 0 016.343 7.343m11.314 11.314a8 8 0 00-11.314-11.314" /></svg>
+                                            <span>Tool Call: @message.ToolName</span>
+                                            <span class="text-xs text-purple-500 ml-auto">@message.Timestamp.ToString("h:mm:ss tt")</span>
+                                        </div>
+                                        <details class="mt-1">
+                                            <summary class="cursor-pointer text-xs text-purple-600 hover:underline">Show Arguments</summary>
+                                            <pre class="mt-1 text-xs bg-purple-50 p-2 rounded border border-purple-200 overflow-x-auto">@FormatJson(message.ToolArgumentsJson)</pre>
+                                        </details>
+                                    </div>
+                                </div>
+                            }
+                            else if (message.Role == OpenAiChatMessage.ToolResultRole)
+                            {
+                                <!-- Tool Result Message -->
+                                <div class="flex justify-center">
+                                    <div class="w-[90%] rounded-md px-3 py-2 bg-teal-100 text-teal-800 border border-teal-200 text-sm">
+                                        <div class="flex items-center font-medium mb-1">
+                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                            <span>Tool Result: @message.ToolName</span>
+                                            <span class="text-xs text-teal-500 ml-auto">@message.Timestamp.ToString("h:mm:ss tt")</span>
+                                        </div>
+                                        <details class="mt-1">
+                                            <summary class="cursor-pointer text-xs text-teal-600 hover:underline">Show Result</summary>
+                                            <pre class="mt-1 text-xs bg-teal-50 p-2 rounded border border-teal-200 overflow-x-auto">@FormatJson(message.ToolResultJson)</pre>
+                                        </details>
+                                    </div>
+                                </div>
+                            }
                         }
                     }
                 </div>
@@ -202,6 +260,8 @@
     private ElementReference chatContainer;
     private string currentVoiceString = string.Empty;
     private string micTestStatus = "Testing microphone...";
+    private bool useTimeTool = true;
+    private bool isToolDetailsExpanded = false; // Example state for expand/collapse (if needed beyond <details>)
 
     protected override void OnInitialized()
     {
@@ -254,19 +314,36 @@
         }
     }
 
-    private async Task Start()
+    private async Task StartSession()
     {
-        await rta.Start();
+        // Get current settings or create new settings
+        var settings = rta.Settings.Clone();
+        
+        // Clear any previously registered tools
+        settings.RegisteredTools.Clear();
+        settings.Tools.Clear();
+        
+        // Add TimeTool if enabled
+        if (useTimeTool)
+        {
+            var timeTool = new TimeTool();
+            settings.RegisteredTools.Add(timeTool);
+            settings.Tools.Add(timeTool.GetToolDefinition());
+        }
+        
+        // Start the session with the configured settings
+        await rta.Start(settings);
+        
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task Stop()
+    private async Task StopSession()
     {
         await rta.Stop();
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task Interrupt()
+    private async Task InterruptSpeech()
     {
         await rta.InterruptSpeech();
         await InvokeAsync(StateHasChanged);
@@ -315,6 +392,29 @@
                     }
                 }
             ");
+        }
+    }
+
+    // Helper function to format JSON for display
+    private string FormatJson(string? jsonString)
+    {
+        if (string.IsNullOrWhiteSpace(jsonString))
+        {    
+            return "(empty)";
+        }
+        try
+        {
+            using var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonString);
+            return System.Text.Json.JsonSerializer.Serialize(jsonDoc, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // If it's not valid JSON, return the original string
+            return jsonString;
+        }
+        catch (Exception ex)
+        {
+            return $"Error formatting JSON: {ex.Message}";
         }
     }
 }

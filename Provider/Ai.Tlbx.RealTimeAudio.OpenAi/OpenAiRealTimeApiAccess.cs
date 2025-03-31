@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Reflection;
 using Ai.Tlbx.RealTimeAudio.OpenAi.Models;
+using System.Collections.Concurrent;
+using Ai.Tlbx.RealTimeAudio.OpenAi.Tools;
 
 namespace Ai.Tlbx.RealTimeAudio.OpenAi
 {
@@ -47,7 +49,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         private CancellationTokenSource? _cancellationTokenSource;
         private readonly JsonSerializerOptions _jsonOptions = new()
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNamingPolicy = null,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
@@ -68,7 +70,8 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         public event EventHandler<string>? ConnectionStatusChanged;
         public event EventHandler<OpenAiChatMessage>? MessageAdded;
         public event EventHandler<string>? MicrophoneTestStatusChanged;
-        public event EventHandler<ToolCallEventArgs>? ToolCallRequested; // New event for tool calls
+        public event EventHandler<(string ToolName, string Result)>? ToolResultAvailable;
+        public event EventHandler<ToolCallEventArgs>? ToolCallRequested;
 
         // Public readonly properties to expose internal state
         public bool IsInitialized => _isInitialized;
@@ -98,6 +101,10 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         public bool IsMicrophoneTesting => _isMicrophoneTesting;
 
+        /// <summary>
+        /// Initializes a new instance of the OpenAiRealTimeApiAccess class.
+        /// </summary>
+        /// <param name="hardwareAccess">The audio hardware access implementation.</param>
         public OpenAiRealTimeApiAccess(IAudioHardwareAccess hardwareAccess)
         {
             _hardwareAccess = hardwareAccess;
@@ -143,12 +150,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 RaiseStatus($"Initialization failed: {ex.Message}");
                 throw;
             }
-        }
-
-        public async Task Init()
-        {
-            await InitializeConnection();
-        }
+        }        
 
         /// <summary>
         /// Starts the full lifecycle - initializes the connection if needed and starts recording audio
@@ -170,7 +172,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 {
                     _isConnecting = true;
                     RaiseStatus("Connection not initialized, connecting first...");
-                    await InitializeConnection();
+                    await InitializeConnection(); // ConfigureSession is called within InitializeConnection
                 }
 
                 RaiseStatus("Starting audio recording...");
@@ -284,50 +286,89 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
         private async Task ConfigureSession()
         {
-            // Build the session configuration dynamically
-            var sessionData = new Dictionary<string, object>
+            try
             {
-                { "model", "gpt-4o-realtime-preview-2024-12-17" }, // Consider making model configurable
-                { "voice", _settings.GetVoiceString() },
-                { "modalities", _settings.Modalities.ToArray() },
-                { "input_audio_format", _settings.GetAudioFormatString(_settings.InputAudioFormat) },
-                { "output_audio_format", _settings.GetAudioFormatString(_settings.OutputAudioFormat) },
-                { "input_audio_transcription", new { model = _settings.GetTranscriptionModelString() } },
-                { "instructions", _settings.Instructions }
-            };
+                // Build the session part dynamically
+                object? turnDetectionConfig = BuildTurnDetectionConfig();
+                
+                // Convert the tools from settings to the format OpenAI expects
+                List<object>? toolsConfig = null;
+                if (_settings.Tools != null && _settings.Tools.Count > 0)
+                {
+                    // Create tools array using anonymous objects with explicit lowercase property names
+                    toolsConfig = new List<object>();
+                    foreach (var toolDef in _settings.Tools)
+                    {
+                        if (toolDef?.Function?.Name == null) continue;
+                        
+                        // Create a tool object with the correct format according to OpenAI docs
+                        toolsConfig.Add(new 
+                        {
+                            type = "function",
+                            name = toolDef.Function.Name,
+                            description = toolDef.Function.Description,
+                            parameters = toolDef.Function.Parameters
+                        });
+                    }
+                }
 
-            // Add turn detection if configured
-            var turnDetectionConfig = BuildTurnDetectionConfig();
-            if (turnDetectionConfig != null)
-            {
-                sessionData.Add("turn_detection", turnDetectionConfig);
+                // Send the current serialized JSON to the debug log to help diagnose issues
+                var debugOptions = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+                string debugTools = JsonSerializer.Serialize(toolsConfig, debugOptions);
+                System.Diagnostics.Debug.WriteLine($"[ConfigureSession] Tool definitions: {debugTools}");
+
+                // Construct the session object more explicitly
+                var sessionPayload = new {
+                    model = "gpt-4o-realtime-preview-2024-12-17", 
+                    voice = _settings.GetVoiceString(),
+                    modalities = _settings.Modalities.ToArray(),
+                    input_audio_format = _settings.GetAudioFormatString(_settings.InputAudioFormat),
+                    output_audio_format = _settings.GetAudioFormatString(_settings.OutputAudioFormat),
+                    input_audio_transcription = new { model = _settings.GetTranscriptionModelString() },
+                    instructions = _settings.Instructions,
+                    turn_detection = turnDetectionConfig, 
+                    tools = toolsConfig 
+                };
+
+                var sessionConfigMessage = new
+                {
+                    type = "session.update",
+                    session = sessionPayload
+                };
+
+                // Force camelCase serialization for all properties
+                var camelCaseOptions = new JsonSerializerOptions 
+                { 
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                };
+                
+                // Log the exact JSON being sent
+                string configJson = JsonSerializer.Serialize(sessionConfigMessage, camelCaseOptions);
+                System.Diagnostics.Debug.WriteLine($"[WebSocket] Sending session config: {configJson}");
+                
+                // Send the configuration JSON as a string to prevent any serialization issues
+                var bytes = Encoding.UTF8.GetBytes(configJson);
+                await _webSocket!.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+                
+                string turnTypeDesc = _settings.TurnDetection.Type switch 
+                {
+                    TurnDetectionType.SemanticVad => "semantic VAD",
+                    TurnDetectionType.ServerVad => "server VAD",
+                    TurnDetectionType.None => "no turn detection",
+                    _ => "unknown turn detection"
+                };
+
+                string toolsDesc = (toolsConfig != null && toolsConfig.Count > 0) ? $" with {toolsConfig.Count} tool(s)" : "";
+
+                RaiseStatus($"Session configured with voice: {_settings.GetVoiceString()}, {turnTypeDesc}{toolsDesc}");
             }
-
-            // Add tools if defined
-            if (_settings.Tools != null && _settings.Tools.Count > 0)
+            catch (Exception ex)
             {
-                sessionData.Add("tools", _settings.Tools);
+                System.Diagnostics.Debug.WriteLine($"[ConfigureSession] Error: {ex.Message}");
+                RaiseStatus($"Error configuring session: {ex.Message}");
+                throw;
             }
-
-            var sessionConfig = new
-            {
-                type = "session.update",
-                session = sessionData
-            };
-
-            await SendAsync(sessionConfig);
-            
-            string turnTypeDesc = _settings.TurnDetection.Type switch 
-            {
-                TurnDetectionType.SemanticVad => "semantic VAD",
-                TurnDetectionType.ServerVad => "server VAD",
-                TurnDetectionType.None => "no turn detection",
-                _ => "unknown turn detection"
-            };
-
-            string toolsDesc = (_settings.Tools != null && _settings.Tools.Count > 0) ? $" with {_settings.Tools.Count} tool(s)" : "";
-
-            RaiseStatus($"Session configured with voice: {_settings.GetVoiceString()}, {turnTypeDesc}{toolsDesc}");
         }
         
         private object? BuildTurnDetectionConfig()
@@ -835,31 +876,73 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                         Debug.WriteLine($"[WebSocket] Received tool calls message: {json.Substring(0, Math.Min(200, json.Length))}...");
                         if (root.TryGetProperty("tool_calls", out var toolCallsArray) && toolCallsArray.ValueKind == JsonValueKind.Array)
                         {
+                            // Process each requested tool call
                             foreach (var toolCallElement in toolCallsArray.EnumerateArray())
                             {
-                                if (toolCallElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.String &&
-                                    toolCallElement.TryGetProperty("type", out var toolTypeElement) && toolTypeElement.GetString() == "function" && // Currently only function is supported
-                                    toolCallElement.TryGetProperty("function", out var functionElement) && functionElement.ValueKind == JsonValueKind.Object &&
-                                    functionElement.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String &&
-                                    functionElement.TryGetProperty("arguments", out var argsElement) && argsElement.ValueKind == JsonValueKind.String)
+                                if (TryParseToolCall(toolCallElement, out var toolCallId, out var functionName, out var argumentsJson))
                                 {
-                                    string toolCallId = idElement.GetString() ?? string.Empty;
-                                    string functionName = nameElement.GetString() ?? string.Empty;
-                                    string argumentsJson = argsElement.GetString() ?? string.Empty;
-
-                                    if (!string.IsNullOrEmpty(toolCallId) && !string.IsNullOrEmpty(functionName))
+                                    // Add Tool Call message to history
+                                    var toolCallMessage = OpenAiChatMessage.CreateToolCallMessage(toolCallId, functionName, argumentsJson);
+                                    _chatHistory.Add(toolCallMessage);
+                                    MessageAdded?.Invoke(this, toolCallMessage); // Notify UI
+                                    
+                                    // Find the tool in the registered tools
+                                    var tool = _settings.RegisteredTools.FirstOrDefault(t => t.Name == functionName);
+                                    
+                                    if (tool != null)
                                     {
-                                        Debug.WriteLine($"[WebSocket] Raising ToolCallRequested event: ID={toolCallId}, Function={functionName}, Args={argumentsJson}");
+                                        // Execute the tool directly
+                                        Debug.WriteLine($"[Tooling] Executing tool: {functionName} (ID: {toolCallId})");
+                                        try
+                                        {
+                                            // Execute the tool
+                                            string result = await tool.ExecuteAsync(argumentsJson);
+                                            
+                                            // Add Tool Result message to history
+                                            var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, result);
+                                            _chatHistory.Add(toolResultMessage);
+                                            MessageAdded?.Invoke(this, toolResultMessage); // Notify UI
+                                            
+                                            // Send the result back to OpenAI
+                                            await SendToolResultAsync(toolCallId, result);
+                                            
+                                            // Notify any listeners about the tool result
+                                            ToolResultAvailable?.Invoke(this, (functionName, result));
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Debug.WriteLine($"[Tooling] Error executing tool '{functionName}' (ID: {toolCallId}): {ex.Message}");
+                                            string errorResult = JsonSerializer.Serialize(new { error = $"Failed to execute tool: {ex.Message}" });
+                                            
+                                            // Add a failure message
+                                            var toolErrorMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, errorResult);
+                                            _chatHistory.Add(toolErrorMessage);
+                                            MessageAdded?.Invoke(this, toolErrorMessage);
+                                            
+                                            // Send the error back to OpenAI
+                                            await SendToolResultAsync(toolCallId, errorResult);
+                                        }
+                                    }
+                                    else if (ToolCallRequested != null)
+                                    {
+                                        // If we don't have the tool implementation but external handlers are subscribed
+                                        // Notify external subscribers 
                                         ToolCallRequested?.Invoke(this, new ToolCallEventArgs(toolCallId, functionName, argumentsJson));
                                     }
                                     else
                                     {
-                                         Debug.WriteLine($"[WebSocket] Failed to parse tool call details: ID or Function Name missing.");
+                                        // No tool handler available
+                                        Debug.WriteLine($"[Tooling] No tool implementation for '{functionName}' (ID: {toolCallId}).");
+                                        string errorResult = JsonSerializer.Serialize(new { error = $"No tool implementation for '{functionName}'." });
+                                        
+                                        // Add a result message indicating failure
+                                        var toolNotFoundMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, functionName, errorResult);
+                                        _chatHistory.Add(toolNotFoundMessage);
+                                        MessageAdded?.Invoke(this, toolNotFoundMessage);
+                                        
+                                        // Send the error result back to OpenAI
+                                        await SendToolResultAsync(toolCallId, errorResult);
                                     }
-                                }
-                                else
-                                {
-                                     Debug.WriteLine($"[WebSocket] Could not parse tool call structure in message element: {toolCallElement.GetRawText()}");
                                 }
                             }
                         }
@@ -887,6 +970,42 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 Debug.WriteLine($"[WebSocket] General Error Handling Message: {ex.Message} for JSON: {json}");
                 Debug.WriteLine($"[WebSocket] StackTrace: {ex.StackTrace}");
             }
+        }
+
+        /// <summary>
+        /// Helper method to parse a JsonElement representing a single tool call.
+        /// </summary>
+        private bool TryParseToolCall(JsonElement toolCallElement, out string toolCallId, out string functionName, out string argumentsJson)
+        {
+             toolCallId = string.Empty;
+             functionName = string.Empty;
+             argumentsJson = string.Empty;
+
+             if (toolCallElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.String &&
+                 toolCallElement.TryGetProperty("type", out var toolTypeElement) && toolTypeElement.GetString() == "function" &&
+                 toolCallElement.TryGetProperty("function", out var functionElement) && functionElement.ValueKind == JsonValueKind.Object &&
+                 functionElement.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String &&
+                 functionElement.TryGetProperty("arguments", out var argsElement) && argsElement.ValueKind == JsonValueKind.String)
+             {
+                 toolCallId = idElement.GetString() ?? string.Empty;
+                 functionName = nameElement.GetString() ?? string.Empty;
+                 argumentsJson = argsElement.GetString() ?? string.Empty;
+
+                 if (!string.IsNullOrEmpty(toolCallId) && !string.IsNullOrEmpty(functionName))
+                 {
+                    return true;
+                 }
+                 else
+                 {
+                     Debug.WriteLine($"[WebSocket] Failed to parse tool call details: ID or Function Name missing.");
+                     return false;
+                 }
+             }
+             else
+             {
+                 Debug.WriteLine($"[WebSocket] Could not parse tool call structure in message element: {toolCallElement.GetRawText()}");
+                 return false;
+             }
         }
 
         private async void OnAudioDataReceived(object sender, MicrophoneAudioReceivedEvenArgs e)
@@ -924,14 +1043,32 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
             try
             {
-                if (_webSocket?.State != WebSocketState.Open) return;
-                json = JsonSerializer.Serialize(message, _jsonOptions);
+                if (_webSocket?.State != WebSocketState.Open) 
+                {
+                    System.Diagnostics.Debug.WriteLine("[WebSocket] Cannot send message, socket not open");
+                    return;
+                }
+
+                try
+                {
+                    // Separate serialization from send to catch and log serialization errors
+                    json = JsonSerializer.Serialize(message, _jsonOptions);
+                    System.Diagnostics.Debug.WriteLine($"[WebSocket] Sending message type: {message.GetType().Name}, Length: {json.Length}");
+                }
+                catch (JsonException jsonEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[WebSocket] JSON serialization error: {jsonEx.Message}");
+                    RaiseStatus($"Error serializing message: {jsonEx.Message}");
+                    throw; // Re-throw to be caught by outer catch
+                }
+
                 var bytes = Encoding.UTF8.GetBytes(json);
                 await _webSocket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
             }
             catch (Exception ex)
             {
-                RaiseStatus($"Error sending message to OpenAI: {ex.Message} \n {json}");
+                System.Diagnostics.Debug.WriteLine($"[WebSocket] Error sending message: {ex.Message}\nJSON: {json}");
+                RaiseStatus($"Error sending message to OpenAI: {ex.Message}");
             }
         }
 
@@ -1273,7 +1410,7 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
                 
             // Store the settings
             _settings = settings;
-            
+                        
             // If we're already connected, update the session with all new settings
             if (_isInitialized && _webSocket?.State == WebSocketState.Open)
             {
@@ -1284,27 +1421,6 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
             {
                 RaiseStatus("Settings updated, will be applied when connected");
             }
-        }
-        
-        /// <summary>
-        /// Validates that the settings are correct and complete
-        /// </summary>
-        /// <returns>True if settings are valid</returns>
-        public bool ValidateSettings()
-        {
-            if (_settings == null)
-                return false;
-                
-            // Check modalities
-            if (_settings.Modalities == null || _settings.Modalities.Count == 0)
-                return false;
-                
-            // Check instructions
-            if (string.IsNullOrWhiteSpace(_settings.Instructions))
-                return false;
-                
-            // Settings are valid
-            return true;
         }
 
         /// <summary>
@@ -1441,6 +1557,41 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
         }
 
         /// <summary>
+        /// Sends the result of a tool execution back to OpenAI and adds it to the chat history.
+        /// </summary>
+        /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
+        /// <param name="toolName">The name of the tool that was called.</param>
+        /// <param name="result">The result of the tool execution (often a JSON string).</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        public async Task HandleToolResultAsync(string toolCallId, string toolName, string result)
+        {
+            if (string.IsNullOrEmpty(toolCallId) || string.IsNullOrEmpty(toolName))
+            {
+                Debug.WriteLine("[Tooling] Tool call ID or name is empty. Cannot handle result.");
+                return;
+            }
+
+            try
+            {
+                // Add a message to chat history for the tool result
+                var toolResultMessage = OpenAiChatMessage.CreateToolResultMessage(toolCallId, toolName, result);
+                _chatHistory.Add(toolResultMessage);
+                MessageAdded?.Invoke(this, toolResultMessage);
+
+                // Send the result back to OpenAI
+                await SendToolResultAsync(toolCallId, result);
+
+                // Notify any listeners about the tool result
+                ToolResultAvailable?.Invoke(this, (toolName, result));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Tooling] Error handling tool result: {ex.Message}");
+                RaiseStatus($"Error handling tool result: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Sends the result of a tool execution back to OpenAI.
         /// </summary>
         /// <param name="toolCallId">The unique ID of the tool call this result corresponds to.</param>
@@ -1470,6 +1621,67 @@ namespace Ai.Tlbx.RealTimeAudio.OpenAi
 
             Debug.WriteLine($"[WebSocket] Sending tool result for ID: {toolCallId}, Result: {result.Substring(0, Math.Min(100, result.Length))}...");
             await SendAsync(toolResultMessage);
+        }
+
+        /// <summary>
+        /// Adds a tool to the current settings.
+        /// </summary>
+        /// <param name="tool">The tool to add.</param>
+        public void AddTool(BaseTool tool)
+        {
+            if (tool == null)
+                throw new ArgumentNullException(nameof(tool));
+
+            // Add to RegisteredTools list if not already present
+            if (!_settings.RegisteredTools.Any(t => t.Name == tool.Name))
+            {
+                _settings.RegisteredTools.Add(tool);
+                
+                // Also add the tool definition to the Tools list
+                var toolDefinition = tool.GetToolDefinition();
+                if (!_settings.Tools.Any(t => t.Function.Name == toolDefinition.Function.Name))
+                {
+                    _settings.Tools.Add(toolDefinition);
+                }
+                
+                Debug.WriteLine($"[Tooling] Added tool to settings: {tool.Name}");
+            }
+        }
+        
+        /// <summary>
+        /// Adds multiple tools to the current settings.
+        /// </summary>
+        /// <param name="tools">The collection of tools to add.</param>
+        public void AddTools(IEnumerable<BaseTool> tools)
+        {
+            if (tools == null)
+                throw new ArgumentNullException(nameof(tools));
+                
+            foreach (var tool in tools)
+            {
+                AddTool(tool);
+            }
+        }
+
+        /// <summary>
+        /// Validates that the settings are correct and complete
+        /// </summary>
+        /// <returns>True if settings are valid</returns>
+        public bool ValidateSettings()
+        {
+            if (_settings == null)
+                return false;
+                
+            // Check modalities
+            if (_settings.Modalities == null || _settings.Modalities.Count == 0)
+                return false;
+                
+            // Check instructions
+            if (string.IsNullOrWhiteSpace(_settings.Instructions))
+                return false;
+                
+            // Settings are valid
+            return true;
         }
     }    
 }
